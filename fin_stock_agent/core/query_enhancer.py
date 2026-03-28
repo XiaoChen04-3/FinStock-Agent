@@ -107,13 +107,14 @@ _ENHANCE_PROMPT = """你是一个专业的金融查询分析助手。
 
 ## 规则
 - sub_queries 最多 4 条，每条对应一个独立的数据查询角度；若问题简单则可为空数组
-- 板块分析时必须包含：①相关主题 ETF ②行业指数 ③龙头股
+- 板块分析时必须按顺序包含：①search_sector_index（找指数代码）②get_index_daily（指数走势）③search_sector_etf（ETF补充，可选）
 - suggested_tools 仅从以下名称中选择：
   get_current_datetime,
   search_stock, get_daily_bars, get_daily_basic_snapshot, get_index_daily,
-  get_major_indices_performance, get_sw_industry_top_movers,
+  get_major_indices_performance,
+  search_sector_index, get_index_basic, get_index_members,
   search_fund, get_fund_daily, get_fund_nav, search_sector_etf,
-  get_concept_list, get_concept_stocks, get_index_members, get_index_basic,
+  get_concept_list, get_concept_stocks,
   get_shibor, get_cpi, get_m2, get_gdp,
   get_income_statement, get_balance_sheet, get_cashflow, get_financial_indicators,
   get_financial_forecast, screen_stocks,

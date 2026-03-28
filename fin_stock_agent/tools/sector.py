@@ -1,4 +1,4 @@
-"""Sector / concept / index member tools using Tushare concept / index_member APIs."""
+"""Sector / concept / index tools using Tushare index_basic / concept APIs."""
 from __future__ import annotations
 
 import json
@@ -21,6 +21,14 @@ def _df_to_payload(df: pd.DataFrame, *, max_rows: int = 200) -> dict:
         "truncated": len(df) > max_rows,
         "data": out.to_dict(orient="records"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Markets that carry tradeable / investable sector/theme indices.
+# SW (申万) is intentionally excluded – SW indices represent a classification
+# scheme, not a market product; their daily data is also less accessible.
+# ---------------------------------------------------------------------------
+_SECTOR_MARKETS = ("SSE", "SZSE", "CSI", "CICC", "OTH")
 
 
 @tool
@@ -62,31 +70,79 @@ def get_concept_stocks(
 
 
 @tool
-def get_index_basic(
-    keyword: Annotated[str, "指数名称关键字，如 沪深300、中证500、白酒、科技；或直接填代码如 000300.SH"],
+def search_sector_index(
+    keyword: Annotated[
+        str,
+        "板块/行业/主题关键字，如 白酒、新能源、半导体、医药、银行、消费、军工、科技、地产",
+    ],
 ) -> str:
-    """按关键字搜索指数基本信息（index_basic API）：指数名称、代码、发布机构、基准日期等。"""
+    """
+    按关键字搜索行业/主题指数（index_basic API），仅返回 CSI（中证）、SSE、SZSE、CICC、OTH
+    市场的可投资指数，不包含申万（SW）分类指数。
+    返回 ts_code 和名称，供 get_index_daily 查询走势使用。
+    这是查询「XXX 板块/行业表现」的首选工具。
+    """
     try:
         c = get_client()
         kw = (keyword or "").strip()
         if not kw:
             return json.dumps({"ok": False, "error": "keyword 不能为空"}, ensure_ascii=False)
 
-        if "." in kw.upper():
-            df = c.call(
-                "index_basic",
-                ts_code=kw.upper(),
-                fields="ts_code,name,fullname,market,publisher,category,base_date,base_point,list_date",
+        fields = "ts_code,name,fullname,market,publisher,category,base_date,list_date"
+        parts = []
+        for mkt in _SECTOR_MARKETS:
+            part = c.call("index_basic", market=mkt, fields=fields)
+            if part is not None and not part.empty:
+                parts.append(part)
+
+        if not parts:
+            return json.dumps(
+                {"ok": True, "rows": 0, "data": [], "note": "无指数数据或权限不足"},
+                ensure_ascii=False,
             )
+
+        df = pd.concat(parts, ignore_index=True).drop_duplicates(subset=["ts_code"])
+
+        # Keyword filter on name + fullname
+        fullname_col = df.get("fullname", pd.Series("", index=df.index)).fillna("")
+        mask = (
+            df["name"].str.contains(kw, case=False, na=False)
+            | fullname_col.str.contains(kw, case=False, na=False)
+        )
+        df = df.loc[mask].copy()
+
+        # Prefer CSI indices (中证) over others for broad sector representation
+        csi_mask = df["market"].str.upper() == "CSI"
+        df["_sort"] = (~csi_mask).astype(int)
+        df = df.sort_values("_sort").drop(columns=["_sort"])
+
+        return json.dumps(_df_to_payload(df, max_rows=20), ensure_ascii=False, default=str)
+    except TushareRequestError as e:
+        return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+
+@tool
+def get_index_basic(
+    keyword: Annotated[str, "指数名称关键字，如 沪深300、中证500；或直接填代码如 000300.SH"],
+) -> str:
+    """
+    按关键字或代码搜索全市场指数基本信息（index_basic API），
+    包含 SSE、SZSE、CSI、CICC 等市场。
+    若查询「某板块/行业表现」请优先使用 search_sector_index，本工具更适合宽基指数查询。
+    """
+    try:
+        c = get_client()
+        kw = (keyword or "").strip()
+        if not kw:
+            return json.dumps({"ok": False, "error": "keyword 不能为空"}, ensure_ascii=False)
+
+        fields = "ts_code,name,fullname,market,publisher,category,base_date,base_point,list_date"
+        if "." in kw.upper():
+            df = c.call("index_basic", ts_code=kw.upper(), fields=fields)
         else:
-            # Search across major exchanges
             parts = []
-            for mkt in ("SSE", "SZSE", "CSI", "MSCI", "SW"):
-                part = c.call(
-                    "index_basic",
-                    market=mkt,
-                    fields="ts_code,name,fullname,market,publisher,category,base_date,base_point,list_date",
-                )
+            for mkt in _SECTOR_MARKETS:
+                part = c.call("index_basic", market=mkt, fields=fields)
                 if part is not None and not part.empty:
                     parts.append(part)
             if not parts:
@@ -95,9 +151,10 @@ def get_index_basic(
                     ensure_ascii=False,
                 )
             df = pd.concat(parts, ignore_index=True).drop_duplicates(subset=["ts_code"])
+            fullname_col = df.get("fullname", pd.Series("", index=df.index)).fillna("")
             mask = (
                 df["name"].str.contains(kw, case=False, na=False)
-                | df.get("fullname", pd.Series(dtype=str)).str.contains(kw, case=False, na=False)
+                | fullname_col.str.contains(kw, case=False, na=False)
             )
             df = df.loc[mask]
 
@@ -129,4 +186,10 @@ def get_index_members(
 
 
 def get_sector_tools():
-    return [get_concept_list, get_concept_stocks, get_index_basic, get_index_members]
+    return [
+        search_sector_index,  # primary sector query tool
+        get_concept_list,
+        get_concept_stocks,
+        get_index_basic,
+        get_index_members,
+    ]

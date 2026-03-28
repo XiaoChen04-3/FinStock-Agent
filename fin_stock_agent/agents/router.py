@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Generator
+from datetime import datetime, timedelta
+from functools import lru_cache
 from typing import Literal
 
 from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
@@ -99,6 +101,7 @@ def run_agent(
     question: str,
     memory: PortfolioMemory | None = None,
     history_messages: list | None = None,
+    tushare_score: int = 0,
 ) -> str:
     """
     Primary entry point called by app_streamlit.py.
@@ -114,7 +117,7 @@ def run_agent(
 
     if mode == "react":
         try:
-            agent = build_react_agent()
+            agent = build_react_agent(tushare_score)
             result = agent.invoke({"messages": msgs})
             return extract_last_ai_text(result.get("messages", [])) or "（模型未返回文本）"
         except Exception as e:
@@ -144,7 +147,7 @@ def run_agent(
         except Exception as e:
             # Final safety net: fall back to ReAct
             try:
-                agent = build_react_agent()
+                agent = build_react_agent(tushare_score)
                 result = agent.invoke({"messages": msgs})
                 fallback_text = extract_last_ai_text(result.get("messages", [])) or "（无返回文本）"
                 return f"[自动降级至 ReAct 模式]\n\n{fallback_text}"
@@ -197,54 +200,188 @@ def _prep_session(
     # Use rewritten question for routing complexity classification
     mode = classify_complexity(eq.rewritten)
 
-    # Build enriched human message: rewritten question + sub-query hints
-    enriched_content = eq.to_context_block()
+    # Always inject current date so the LLM never has to guess relative times
+    _now = datetime.now()
+    _wd = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][_now.weekday()]
+    _recent_7 = [(_now - timedelta(days=i)).strftime("%Y%m%d") for i in range(7)]
+    _date_ctx = (
+        f"[系统时间] 今日 {_now.strftime('%Y-%m-%d')} {_wd}，"
+        f"YYYYMMDD={_now.strftime('%Y%m%d')}。"
+        f"近7日日期列表（含今日）：{', '.join(_recent_7)}。"
+        f"A股交易日为周一至周五（法定节假日除外），若某日无行情数据请向前取最近交易日。"
+    )
+
+    # Build enriched human message: date context + rewritten question + sub-query hints
+    enriched_content = _date_ctx + "\n\n" + eq.to_context_block()
     msgs = list(history_messages or []) + [HumanMessage(content=enriched_content)]
 
     return mode, msgs, eq
 
 
-def _stream_react(
-    msgs: list,
-) -> Generator[tuple[str, str], None, str]:
+# ---------------------------------------------------------------------------
+# Tool description + result summary helpers
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=1)
+def _tool_desc_map() -> dict[str, str]:
+    """Lazily build {tool_name: first-sentence description} from all registered tools."""
+    try:
+        from fin_stock_agent.agents.react_agent import _all_tools  # local import avoids cycles
+        result: dict[str, str] = {}
+        for t in _all_tools():
+            desc = (t.description or "").strip()
+            for sep in ("。", "；", "（", "\n"):
+                idx = desc.find(sep)
+                if 0 < idx < 60:
+                    desc = desc[:idx]
+                    break
+            result[t.name] = desc[:60]
+        return result
+    except Exception:
+        return {}
+
+
+def _summarize_result(raw: str) -> str:
+    """Parse a tool's JSON output and return a concise Chinese summary."""
+    try:
+        data = json.loads(raw)
+    except Exception:
+        cleaned = raw.strip()[:120].replace("\n", " ")
+        return cleaned or "(无返回内容)"
+
+    # Explicit error
+    if data.get("ok") is False:
+        return f"❌ {str(data.get('error', '未知错误'))[:80]}"
+
+    # get_current_datetime
+    if "today_display" in data:
+        return (
+            f"今日 {data.get('today_display', '')} "
+            f"{data.get('weekday', '')}  {data.get('time', '')}"
+        )
+
+    # get_major_indices_performance
+    if "indices" in data:
+        items = data["indices"]
+        n = len(items)
+        parts = [f"{x.get('name','')} {x.get('pct_chg_period','')}%" for x in items[:3] if x.get("name")]
+        return f"{n} 个指数区间涨跌：" + "、".join(parts)
+
+    # get_sw_industry_top_movers
+    if "top_gainers" in data or "top_losers" in data:
+        td = data.get("trade_date", "")
+        g = data.get("top_gainers", [])
+        lo = data.get("top_losers", [])
+        g_names = [x.get("industry_name", x.get("ts_code", "")) for x in g[:3]]
+        l_names = [x.get("industry_name", x.get("ts_code", "")) for x in lo[:3]]
+        return (
+            f"{td} 涨幅前3：{'、'.join(g_names)}；"
+            f"跌幅前3：{'、'.join(l_names)}"
+        )
+
+    # calculate_portfolio_pnl
+    if "positions" in data:
+        n = len(data.get("positions", []))
+        fl = data.get("floating_pnl_total", "?")
+        rl = data.get("realized_pnl_total", "?")
+        return f"共 {n} 个持仓，浮动盈亏 {fl}，已实现盈亏 {rl}"
+
+    # get_portfolio_positions / memory_tools plain dicts
+    if "trades" in data or "holdings" in data:
+        n = len(data.get("holdings") or data.get("trades") or [])
+        return f"持仓记录 {n} 条"
+
+    # Standard _df_to_payload format
+    rows = data.get("rows")
+    note = data.get("note", "")
+    if rows is not None:
+        if rows == 0:
+            return note or "无数据"
+        trunc = "（部分）" if data.get("truncated") else ""
+        summary = f"共 {rows} 条{trunc}"
+        records = data.get("data") or []
+        if records and isinstance(records, list):
+            first = records[0]
+            if "trade_date" in first:
+                dates = sorted(
+                    str(r["trade_date"]) for r in records if r.get("trade_date")
+                )
+                if dates:
+                    span = f"{dates[0]}~{dates[-1]}" if dates[0] != dates[-1] else dates[0]
+                    summary += f"，时间 {span}"
+            elif "name" in first:
+                names = [str(r["name"]) for r in records[:3] if r.get("name")]
+                if names:
+                    summary += f"，含 {'、'.join(names)}"
+            elif "concept_name" in first:
+                names = [str(r["concept_name"]) for r in records[:3] if r.get("concept_name")]
+                if names:
+                    summary += f"，含 {'、'.join(names)}"
+        return summary
+
+    # Generic success
+    return "✅ 数据已返回"
+
+
+# ---------------------------------------------------------------------------
+# ReAct streaming helper
+# ---------------------------------------------------------------------------
+
+def _stream_react(msgs: list, score: int = 0) -> Generator[tuple[str, str], None, None]:
     """
-    Stream events from the ReAct agent.
-    Returns the complete answer text as the generator's return value.
-    Callers that only iterate will receive all ("token", ...) events.
+    Stream a ReAct agent execution, yielding structured events.
+
+    Event types emitted:
+      "tool_start"       – tool call has been decided; content = tool name
+      "tool_interaction" – tool finished; content = JSON {name, description, summary}
+      "token"            – final answer text fragment
+      "error"            – unrecoverable error message
+
+    On streaming failure, yields ("error", message) and stops.
+    Does NOT yield raw "tool_call" / "tool_result" events any more.
     """
-    agent = build_react_agent()
-    tokens: list[str] = []
+    agent = build_react_agent(score)
+    pending_tool_name: str = ""
     try:
         for chunk, _meta in agent.stream(
-            {"messages": msgs}, stream_mode="messages"
+            {"messages": msgs},
+            config={"recursion_limit": 50},
+            stream_mode="messages",
         ):
             if isinstance(chunk, AIMessageChunk):
-                # Tool-call decision: accumulate tool_call_chunks until complete
                 if chunk.tool_call_chunks:
                     for tc in chunk.tool_call_chunks:
                         name = tc.get("name") or ""
-                        if name:
-                            args_raw = tc.get("args") or ""
-                            # args may arrive in multiple chunks; show name immediately
-                            yield ("tool_call", f"{name}({str(args_raw)[:80]}…)")
+                        # Only emit tool_start on the first chunk that carries the name
+                        if name and not pending_tool_name:
+                            pending_tool_name = name
+                            yield ("tool_start", name)
                 elif chunk.content:
                     text = chunk.content
                     if isinstance(text, str) and text:
-                        tokens.append(text)
                         yield ("token", text)
             elif isinstance(chunk, ToolMessage):
-                summary = str(chunk.content)[:200]
-                yield ("tool_result", summary)
+                # Prefer buffered name; fall back to ToolMessage.name attribute
+                tool_name = pending_tool_name or (getattr(chunk, "name", None) or "unknown")
+                desc = _tool_desc_map().get(tool_name, "")
+                summary = _summarize_result(str(chunk.content))
+                yield (
+                    "tool_interaction",
+                    json.dumps(
+                        {"name": tool_name, "description": desc, "summary": summary},
+                        ensure_ascii=False,
+                    ),
+                )
+                pending_tool_name = ""
     except Exception as e:
         yield ("error", str(e))
-
-    return "".join(tokens)
 
 
 def stream_agent(
     question: str,
     memory: PortfolioMemory | None = None,
     history_messages: list | None = None,
+    tushare_score: int = 0,
 ) -> Generator[tuple[str, str], None, None]:
     """
     Streaming entry point for app_streamlit.py.
@@ -273,35 +410,22 @@ def stream_agent(
 
     # ---- ReAct path --------------------------------------------------------
     if mode_key == "react":
-        tokens: list[str] = []
-        try:
-            agent = build_react_agent()
-            for chunk, _meta in agent.stream(
-                {"messages": msgs}, stream_mode="messages"
-            ):
-                if isinstance(chunk, AIMessageChunk):
-                    if chunk.tool_call_chunks:
-                        for tc in chunk.tool_call_chunks:
-                            name = tc.get("name") or ""
-                            if name:
-                                args_raw = str(tc.get("args") or "")[:80]
-                                yield ("tool_call", f"{name}({args_raw}…)")
-                    elif chunk.content:
-                        text = chunk.content
-                        if isinstance(text, str) and text:
-                            tokens.append(text)
-                            yield ("token", text)
-                elif isinstance(chunk, ToolMessage):
-                    yield ("tool_result", str(chunk.content)[:200])
-        except Exception as e:
-            # Try non-streaming fallback via invoke
+        streaming_error: str | None = None
+        for ev_type, content in _stream_react(msgs, score=tushare_score):
+            if ev_type == "error":
+                streaming_error = content
+                break
+            yield (ev_type, content)
+
+        if streaming_error:
+            # Non-streaming fallback
             try:
-                agent2 = build_react_agent()
+                agent2 = build_react_agent(tushare_score)
                 result = agent2.invoke({"messages": msgs})
                 fallback = extract_last_ai_text(result.get("messages", [])) or "（无返回文本）"
                 yield ("answer", f"[流式失败，完整回答]\n\n{fallback}")
             except Exception as e2:
-                yield ("error", f"ReAct 失败: {e}; 降级也失败: {e2}")
+                yield ("error", f"ReAct 流式失败: {streaming_error}; 降级也失败: {e2}")
         return
 
     # ---- Plan-and-Execute path ---------------------------------------------
@@ -361,24 +485,7 @@ def stream_agent(
             yield ("error", "Plan-and-Execute 未产生最终回答")
 
     except Exception as e:
-        # PnE failed entirely – stream via ReAct as fallback
+        # PnE failed entirely – fall back to ReAct (uses the same structured events)
         yield ("thinking", f"[P&E 失败 ({e})，降级至 ReAct]")
-        try:
-            agent = build_react_agent()
-            tokens: list[str] = []
-            for chunk, _meta in agent.stream(
-                {"messages": msgs}, stream_mode="messages"
-            ):
-                if isinstance(chunk, AIMessageChunk):
-                    if chunk.tool_call_chunks:
-                        for tc in chunk.tool_call_chunks:
-                            name = tc.get("name") or ""
-                            if name:
-                                yield ("tool_call", f"{name}(…)")
-                    elif chunk.content and isinstance(chunk.content, str):
-                        tokens.append(chunk.content)
-                        yield ("token", chunk.content)
-                elif isinstance(chunk, ToolMessage):
-                    yield ("tool_result", str(chunk.content)[:200])
-        except Exception as e2:
-            yield ("error", f"P&E 降级也失败: {e2}")
+        for ev_type, content in _stream_react(msgs, score=tushare_score):
+            yield (ev_type, content)
