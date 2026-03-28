@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from fin_stock_agent.agents.react_agent import build_react_agent, extract_last_ai_text
 from fin_stock_agent.core.exceptions import AgentRoutingError
 from fin_stock_agent.core.llm import get_llm
+from fin_stock_agent.core.query_enhancer import EnhancedQuery, enhance_query
 from fin_stock_agent.memory.portfolio_memory import (
     PortfolioMemory,
     TradeRecord,
@@ -103,26 +104,13 @@ def run_agent(
     Primary entry point called by app_streamlit.py.
 
     Steps:
-    1. Register the session memory so tools can access it.
-    2. Extract any trade mentions from the user message and persist to memory.
-    3. Classify question complexity.
+    1. Activate memory, extract trades from the message.
+    2. Run query enhancement (intent recognition + rewrite + multi-query expansion).
+    3. Classify routing complexity based on the enhanced question.
     4. Dispatch to ReAct or Plan-and-Execute; return final text answer.
     """
-    # 1. Activate memory for this session
-    if memory is not None:
-        set_active(memory)
-    active_mem = get_active()
-
-    # 2. Extract trades from the user message
-    trades = _extract_trades(question)
-    for t in trades:
-        active_mem.add(t)
-
-    # 3. Classify complexity
-    mode = classify_complexity(question)
-
-    # 4. Dispatch
-    msgs = list(history_messages or []) + [HumanMessage(content=question)]
+    # 1–3. Shared pre-processing (memory, trade extraction, enhancement, routing)
+    mode, msgs, _eq = _prep_session(question, memory, history_messages)
 
     if mode == "react":
         try:
@@ -184,16 +172,36 @@ def _prep_session(
     question: str,
     memory: PortfolioMemory | None,
     history_messages: list | None,
-) -> tuple[str, list]:
-    """Shared pre-processing: activate memory, extract trades, return (mode, msgs)."""
+) -> tuple[str, list, EnhancedQuery]:
+    """
+    Shared pre-processing:
+      1. Activate memory.
+      2. Extract trades from the raw message.
+      3. Run query enhancement (intent recognition + rewrite + multi-query expansion).
+      4. Classify routing complexity based on the *enhanced* question.
+      5. Build the messages list with the enriched context block.
+
+    Returns (mode, msgs, enhanced_query).
+    """
     if memory is not None:
         set_active(memory)
     active_mem = get_active()
+
+    # Extract trades from the original message before any rewriting
     for t in _extract_trades(question):
         active_mem.add(t)
-    mode = classify_complexity(question)
-    msgs = list(history_messages or []) + [HumanMessage(content=question)]
-    return mode, msgs
+
+    # Query enhancement
+    eq = enhance_query(question)
+
+    # Use rewritten question for routing complexity classification
+    mode = classify_complexity(eq.rewritten)
+
+    # Build enriched human message: rewritten question + sub-query hints
+    enriched_content = eq.to_context_block()
+    msgs = list(history_messages or []) + [HumanMessage(content=enriched_content)]
+
+    return mode, msgs, eq
 
 
 def _stream_react(
@@ -245,13 +253,23 @@ def stream_agent(
     and the final answer incrementally.
     """
     try:
-        mode_key, msgs = _prep_session(question, memory, history_messages)
+        mode_key, msgs, eq = _prep_session(question, memory, history_messages)
     except Exception as e:
         yield ("error", f"初始化失败: {e}")
         return
 
     mode_label = "ReAct" if mode_key == "react" else "Plan-and-Execute"
     yield ("mode", mode_label)
+
+    # Emit intent recognition result for UI display
+    yield ("thinking", f"意图识别：{eq.intent_label()}（{eq.intent.value}）")
+    if eq.rewritten != question:
+        yield ("thinking", f"查询重写：{eq.rewritten}")
+    if eq.suggested_tools:
+        yield ("thinking", "推荐工具：" + "、".join(eq.suggested_tools))
+    if eq.sub_queries:
+        yield ("thinking", f"多角度查询扩展（{len(eq.sub_queries)} 条）："
+               + " | ".join(eq.sub_queries))
 
     # ---- ReAct path --------------------------------------------------------
     if mode_key == "react":

@@ -6,18 +6,32 @@ from langgraph.prebuilt import create_react_agent
 
 from fin_stock_agent.core.llm import get_llm
 from fin_stock_agent.prompts.react_prompt import REACT_SYSTEM_PROMPT
+from fin_stock_agent.tools.activity import get_activity_tools
+from fin_stock_agent.tools.derivatives import get_derivatives_tools
+from fin_stock_agent.tools.fund_etf import get_fund_etf_tools
+from fin_stock_agent.tools.fundamentals import get_fundamentals_tools
+from fin_stock_agent.tools.global_markets import get_global_market_tools
+from fin_stock_agent.tools.macro import get_macro_tools
 from fin_stock_agent.tools.market import get_market_tools
 from fin_stock_agent.tools.memory_tools import get_memory_tools
 from fin_stock_agent.tools.portfolio import get_portfolio_tools
+from fin_stock_agent.tools.sector import get_sector_tools
 from fin_stock_agent.utils.datetime_utils import get_datetime_tools
 
 
 def _all_tools():
     return [
-        *get_datetime_tools(),   # datetime first so it's easy to find in tool list
-        *get_market_tools(),
-        *get_portfolio_tools(),
-        *get_memory_tools(),
+        *get_datetime_tools(),        # time resolution (always first)
+        *get_market_tools(),          # A-share market data + indices
+        *get_fund_etf_tools(),        # fund / ETF search and daily bars
+        *get_sector_tools(),          # concept boards and index members
+        *get_macro_tools(),           # macro-economy (CPI / M2 / GDP / SHIBOR)
+        *get_fundamentals_tools(),    # financial statements + stock screener
+        *get_activity_tools(),        # money flow, limit list, dragon-tiger, northbound
+        *get_global_market_tools(),   # HK stocks, US stocks, global indices
+        *get_derivatives_tools(),     # convertible bonds, futures, options
+        *get_portfolio_tools(),       # portfolio PnL calculation
+        *get_memory_tools(),          # in-session trade memory
     ]
 
 

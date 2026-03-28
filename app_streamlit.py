@@ -73,15 +73,15 @@ def main() -> None:
                 cm.clear()
                 st.rerun()
 
-        st.divider()
-        st.subheader("🤖 Agent 模式说明")
-        st.markdown(
-            """
-- **ReAct 模式**：单一意图查询（行情、指数、记录交易）
-- **Plan & Execute**：复杂多步分析（持仓对比大盘、多股分析等）
-- 如 P&E 失败将自动降级至 ReAct
-            """
-        )
+#         st.divider()
+#         st.subheader("🤖 Agent 模式说明")
+#         st.markdown(
+#             """
+# - **ReAct 模式**：单一意图查询（行情、指数、记录交易）
+# - **Plan & Execute**：复杂多步分析（持仓对比大盘、多股分析等）
+# - 如 P&E 失败将自动降级至 ReAct
+#             """
+#         )
 
     # ---------------------------------------------------------------------------
     # Chat history display
