@@ -1,55 +1,85 @@
 # FinStock-Agent
 
-基于 **LangGraph**、**Tushare** 与 **OpenAI 兼容 API** 的股票数据对话助手，使用 **Streamlit** 提供界面。数据仅供学习研究，输出不构成投资建议。
+基于 **LangGraph** + **Tushare** + **OpenAI 兼容 API** 的 A 股市场对话助手，使用 **Streamlit** 提供界面。
 
-## 功能概览
+> 数据仅供学习研究，输出不构成投资建议。
 
-- 对话查询 A 股基础信息、日线行情、`daily_basic` 估值快照（视 Tushare 积分）
-- 主要宽基指数区间表现、指数日线
-- 申万一级行业涨跌排行（依赖 `sw_daily` / `index_classify` 权限与积分）
-- 上传买卖流水 CSV，计算加权成本、实现盈亏与浮动盈亏（收盘价来自 Tushare `daily`）
+---
 
-## 环境准备
+## 功能
 
-1. Python 3.10+（推荐 3.11）
-2. [Tushare Pro](https://tushare.pro/) 账号与 `token`
-3. 任意 OpenAI 兼容网关的 `api_key` 与 `base_url`（如 DeepSeek、通义等）
+| 功能 | 说明 |
+|------|------|
+| 对话查行情 | 股票基础信息、日线行情、估值快照（视 Tushare 积分） |
+| 指数 & 板块 | 宽基指数区间涨跌、申万一级行业涨跌排行 |
+| 持仓记忆 | 在对话中提及买卖交易，Agent 自动识别并存入记忆 |
+| 盈亏计算 | 基于持仓记忆，加权平均成本法计算实现/浮动盈亏 |
+| 智能路由 | 简单问题 → ReAct；复杂多步分析 → Plan-and-Execute；P&E 失败自动降级 |
 
-## 安装
+---
+
+## 项目架构
+
+```
+fin_stock_agent/
+  core/           # 核心层：settings、LLM 工厂、异常
+  agents/         # Agent 层：ReAct、Plan-and-Execute、路由器
+  tools/          # 工具层：market / portfolio / memory_tools
+  memory/         # 记忆层：PortfolioMemory、ConversationMemory
+  prompts/        # Prompt 层：react / plan / extraction 四套模板
+  utils/          # 通用工具层：TushareClient、PnL 计算器
+app_streamlit.py  # Streamlit 入口
+```
+
+---
+
+## 快速开始
+
+### 1. 安装依赖
 
 ```bash
-cd FinStock-Agent
 pip install -r requirements.txt
 ```
 
-填写环境变量：
+### 2. 配置环境变量
 
-编辑 `.env`：`TUSHARE_TOKEN`、`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`。
 
-## 验证 Tushare
+编辑 `.env`：
+
+```
+TUSHARE_TOKEN=你的token
+OPENAI_API_KEY=sk-xxx
+OPENAI_BASE_URL=https://api.deepseek.com/v1   # 或任意 OpenAI 兼容地址
+OPENAI_MODEL=deepseek-chat
+```
+
+### 3. 验证 Tushare 连通性
 
 ```bash
 python verify_tushare.py
 ```
 
-应打印 `stock_basic` 样例行。
-
-## 运行 Streamlit
+### 4. 启动
 
 ```bash
 streamlit run app_streamlit.py
 ```
 
-在侧边栏可下载持仓 CSV 模板、上传流水；勾选「附带 CSV」后，下一条提问会把文件内容交给 Agent，模型应调用 `calculate_portfolio_pnl`。
+---
 
-## 项目结构
+## 使用持仓记忆
 
-- `finstock_agent/`：配置、Tushare 封装（节流、重试、日线/指数 SQLite 缓存）
-- `finstock_agent/tools/market.py`：行情与指数、行业类工具
-- `finstock_agent/tools/portfolio.py`：持仓盈亏工具与 CSV 模板
-- `finstock_agent/agent/graph.py`：`create_react_agent` 装配
-- `app_streamlit.py`：Web 入口
-- `tests/test_portfolio.py`：盈亏计算单元测试
+无需上传 CSV，直接在对话中告诉 Agent：
+
+- 「我上周买了100股茅台(600519.SH)，价格1688元」
+- 「今天卖出了30股，成交价1750元，手续费5块」
+- 「帮我计算一下现在的盈亏情况」
+
+Agent 会自动提取交易信息、存入记忆，并在需要时调用盈亏计算工具。
+
+左侧边栏实时显示所有已记录的交易流水，可随时清空。
+
+---
 
 ## 测试
 
@@ -57,8 +87,8 @@ streamlit run app_streamlit.py
 pytest tests -q
 ```
 
-## 说明与限制
+---
 
-- Tushare 不同接口对积分要求不同；权限不足时工具会返回可读错误信息。
-- 行业排行工具会对多个行业代码逐次请求，已限制单次最多 25 个以控制耗时。
-- 默认缓存文件路径由 `FINSTOCK_CACHE_PATH` 指定（默认项目根目录下 `.finstock_cache.sqlite`）。
+## Tushare 积分说明
+
+不同接口对积分要求不同，积分不足时工具会返回可读错误。推荐先用 `stock_basic`、`daily`、`index_daily` 等低积分接口验证流程，再根据账号权限开放更多功能。

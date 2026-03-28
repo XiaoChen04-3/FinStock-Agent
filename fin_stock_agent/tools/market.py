@@ -7,17 +7,8 @@ from typing import Annotated
 import pandas as pd
 from langchain_core.tools import tool
 
-from finstock_agent.errors import TushareRequestError
-from finstock_agent.tushare_client import TushareClient, get_client
-
-_client: TushareClient | None = None
-
-
-def _client_or_raise() -> TushareClient:
-    global _client
-    if _client is None:
-        _client = get_client()
-    return _client
+from fin_stock_agent.core.exceptions import TushareRequestError
+from fin_stock_agent.utils.tushare_client import get_client
 
 
 def _df_to_payload(df: pd.DataFrame, *, max_rows: int = 200) -> dict:
@@ -41,7 +32,7 @@ def search_stock(
 ) -> str:
     """按 ts_code 精确匹配或按名称模糊搜索 A 股基础信息（stock_basic）。"""
     try:
-        c = _client_or_raise()
+        c = get_client()
         kw = (keyword_or_code or "").strip()
         if not kw:
             return json.dumps({"ok": False, "error": "keyword_or_code 不能为空"}, ensure_ascii=False)
@@ -76,11 +67,10 @@ def get_daily_bars(
 ) -> str:
     """获取股票日线行情（未复权）：open/high/low/close/vol/pct_chg 等。"""
     try:
-        c = _client_or_raise()
-        code = ts_code.strip().upper()
+        c = get_client()
         df = c.call(
             "daily",
-            ts_code=code,
+            ts_code=ts_code.strip().upper(),
             start_date=start_date.replace("-", ""),
             end_date=end_date.replace("-", ""),
             use_cache=True,
@@ -96,22 +86,17 @@ def get_daily_basic_snapshot(
 ) -> str:
     """全市场当日估值快照（daily_basic）：PE、PB、换手率、市值等；需足够 Tushare 积分。"""
     try:
-        c = _client_or_raise()
+        c = get_client()
         td = (trade_date or "").strip().replace("-", "")
         if not td:
             cal = c.call(
-                "trade_cal",
-                exchange="SSE",
-                end_date=datetime.now().strftime("%Y%m%d"),
-                is_open="1",
+                "trade_cal", exchange="SSE",
+                end_date=datetime.now().strftime("%Y%m%d"), is_open="1",
             )
             if cal is None or cal.empty:
-                return json.dumps(
-                    {"ok": False, "error": "无法获取交易日历"}, ensure_ascii=False
-                )
-            opens = cal.sort_values("cal_date", ascending=False).head(12)
+                return json.dumps({"ok": False, "error": "无法获取交易日历"}, ensure_ascii=False)
             last_open = None
-            for _, row in opens.iterrows():
+            for _, row in cal.sort_values("cal_date", ascending=False).head(12).iterrows():
                 d = str(row["cal_date"]).replace("-", "")
                 test = c.call("daily_basic", trade_date=d)
                 if test is not None and not test.empty:
@@ -119,8 +104,7 @@ def get_daily_basic_snapshot(
                     break
             if not last_open:
                 return json.dumps(
-                    {"ok": False, "error": "近期无 daily_basic 数据或权限不足"},
-                    ensure_ascii=False,
+                    {"ok": False, "error": "近期无 daily_basic 数据或权限不足"}, ensure_ascii=False
                 )
             td = last_open
         df = c.call("daily_basic", trade_date=td)
@@ -138,7 +122,7 @@ def get_index_daily(
 ) -> str:
     """指数日线行情（index_daily）。"""
     try:
-        c = _client_or_raise()
+        c = get_client()
         df = c.call(
             "index_daily",
             ts_code=ts_code.strip().upper(),
@@ -168,7 +152,7 @@ def get_major_indices_performance(
 ) -> str:
     """主要宽基指数区间涨跌幅汇总（基于 index_daily 收盘价）。"""
     try:
-        c = _client_or_raise()
+        c = get_client()
         s = start_date.replace("-", "")
         e = end_date.replace("-", "")
         rows: list[dict] = []
@@ -202,9 +186,9 @@ def get_sw_industry_top_movers(
     trade_date: Annotated[str, "交易日 YYYYMMDD；可留空使用最近有效交易日"],
     top_n: Annotated[int, "返回涨跌前 N 个申万一级行业"] = 5,
 ) -> str:
-    """申万一级行业指数当日涨跌幅排行（sw_daily + index_classify）。积分不足时会返回错误说明。"""
+    """申万一级行业指数当日涨跌幅排行（sw_daily + index_classify）。积分不足时返回错误说明。"""
     try:
-        c = _client_or_raise()
+        c = get_client()
         td = (trade_date or "").strip().replace("-", "")
         if not td:
             end_d = datetime.now().strftime("%Y%m%d")
@@ -219,8 +203,7 @@ def get_sw_industry_top_movers(
                     break
             if not td:
                 return json.dumps(
-                    {"ok": False, "error": "无 sw_daily 数据或权限/积分不足"},
-                    ensure_ascii=False,
+                    {"ok": False, "error": "无 sw_daily 数据或权限/积分不足"}, ensure_ascii=False
                 )
 
         cls = c.call("index_classify", level="L1", src="SW2021")
@@ -228,42 +211,35 @@ def get_sw_industry_top_movers(
             cls = c.call("index_classify", level="L1", src="SW2014")
         if cls is None or cls.empty:
             return json.dumps(
-                {"ok": False, "error": "index_classify 无数据或权限不足"},
-                ensure_ascii=False,
+                {"ok": False, "error": "index_classify 无数据或权限不足"}, ensure_ascii=False
             )
-        codes = cls["index_code"].dropna().unique().tolist()
-        # 控制请求量，避免一次对话触发过多 Tushare 调用
-        codes = codes[:25]
+
+        codes = cls["index_code"].dropna().unique().tolist()[:25]
         daily_parts: list[pd.DataFrame] = []
         for code in codes:
-            part = c.call(
-                "sw_daily",
-                ts_code=code,
-                trade_date=td,
-                use_cache=True,
-            )
+            part = c.call("sw_daily", ts_code=code, trade_date=td, use_cache=True)
             if part is not None and not part.empty:
                 daily_parts.append(part)
+
         if not daily_parts:
             return json.dumps(
-                {"ok": False, "error": f"{td} 无行业日线数据或 sw_daily 权限不足"},
-                ensure_ascii=False,
+                {"ok": False, "error": f"{td} 无行业日线数据或 sw_daily 权限不足"}, ensure_ascii=False
             )
+
         df = pd.concat(daily_parts, ignore_index=True)
         name_map = cls.set_index("index_code")["industry_name"].to_dict()
         df["industry_name"] = df["ts_code"].map(name_map).fillna(df["ts_code"])
         pct_col = "pct_change" if "pct_change" in df.columns else "pct_chg"
         if pct_col not in df.columns:
             return json.dumps(
-                {"ok": False, "error": "sw_daily 返回中无涨跌幅字段"},
-                ensure_ascii=False,
+                {"ok": False, "error": "sw_daily 返回中无涨跌幅字段"}, ensure_ascii=False
             )
-        df = df.sort_values(pct_col, ascending=False, na_position="last")
+
         n = max(1, min(int(top_n), 30))
-        top_up = df.head(n)
-        top_down = df.sort_values(pct_col, ascending=True, na_position="last").head(n)
-        cols = ["ts_code", "industry_name", "close", pct_col]
-        cols = [x for x in cols if x in df.columns]
+        df_sorted = df.sort_values(pct_col, ascending=False, na_position="last")
+        top_up = df_sorted.head(n)
+        top_down = df_sorted.tail(n).sort_values(pct_col, ascending=True)
+        cols = [c for c in ["ts_code", "industry_name", "close", pct_col] if c in df.columns]
         return json.dumps(
             {
                 "ok": True,

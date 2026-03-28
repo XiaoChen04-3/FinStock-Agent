@@ -1,8 +1,6 @@
-"""阶段0：验证 TUSHARE_TOKEN 与 stock_basic 连通性。用法: python verify_tushare.py"""
-
+"""Verify TUSHARE_TOKEN connectivity. Usage: python verify_tushare.py"""
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -16,25 +14,25 @@ load_dotenv()
 
 
 def main() -> int:
-    token = (os.getenv("TUSHARE_TOKEN") or "").strip()
-    if not token:
-        print("错误: 未设置 TUSHARE_TOKEN")
+    from fin_stock_agent.core.settings import settings
+
+    if not settings.tushare_token:
+        print("错误: 未设置 TUSHARE_TOKEN，请在 .env 中配置。")
         return 1
-    from finstock_agent.tushare_client import TushareClient
+
+    from fin_stock_agent.utils.tushare_client import TushareClient
 
     try:
-        c = TushareClient(token=token, cache_enabled=False)
-        df = c.call(
-            "stock_basic",
-            list_status="L",
-            fields="ts_code,name",
-        )
+        c = TushareClient(token=settings.tushare_token, cache_enabled=False)
+        df = c.call("stock_basic", list_status="L", fields="ts_code,name")
     except Exception as e:
         print("调用失败:", e)
         return 2
+
     if df is None or df.empty:
         print("stock_basic 返回空，请检查 token/权限")
         return 3
+
     print("连通成功，总行数:", len(df))
     print(df.head(5))
     return 0

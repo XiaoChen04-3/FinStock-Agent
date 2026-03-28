@@ -11,8 +11,8 @@ import pandas as pd
 import tushare as ts
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from finstock_agent.config import settings
-from finstock_agent.errors import TushareRequestError
+from fin_stock_agent.core.exceptions import TushareRequestError
+from fin_stock_agent.core.settings import settings
 
 
 class TushareClient:
@@ -61,8 +61,7 @@ class TushareClient:
             conn.close()
             if not row:
                 return None
-            data = json.loads(row[0])
-            return pd.DataFrame(data)
+            return pd.DataFrame(json.loads(row[0]))
         except Exception:
             return None
 
@@ -124,5 +123,14 @@ class TushareClient:
         return df
 
 
+_client_singleton: TushareClient | None = None
+_client_lock = threading.Lock()
+
+
 def get_client() -> TushareClient:
-    return TushareClient()
+    global _client_singleton
+    if _client_singleton is None:
+        with _client_lock:
+            if _client_singleton is None:
+                _client_singleton = TushareClient()
+    return _client_singleton
