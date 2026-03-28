@@ -129,6 +129,7 @@ celerybeat.pid
 
 # Environments
 .env
+.finstock_cache.sqlite
 .venv
 env/
 venv/
