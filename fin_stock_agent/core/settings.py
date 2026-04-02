@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -25,9 +24,6 @@ class Settings:
             os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         )
         self.openai_model: str = _strip(os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-        self.cache_path: Path = Path(
-            _strip(os.getenv("FINSTOCK_CACHE_PATH")) or ".finstock_cache.sqlite"
-        )
 
 
 settings = Settings()
