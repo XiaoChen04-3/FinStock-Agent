@@ -128,6 +128,30 @@ class NewsCacheORM(Base):
     fetched_at = Column(DateTime, default=datetime.utcnow)
 
 
+class DailyReportDigestORM(Base):
+    """Lightweight per-day harness extracted from DailyReport for memory injection."""
+
+    __tablename__ = "daily_report_digests"
+    __table_args__ = (UniqueConstraint("user_id", "report_date", name="uq_user_digest_date"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), index=True)
+    report_date = Column(String(10), nullable=False)
+
+    sentiment_label = Column(String(20), nullable=True)
+    overall_summary = Column(String(400), nullable=True)
+    market_context = Column(String(600), nullable=True)
+
+    holdings_digest_json = Column(Text, nullable=True)
+
+    buy_count = Column(Integer, default=0)
+    hold_count = Column(Integer, default=0)
+    sell_count = Column(Integer, default=0)
+    total_pnl_pct = Column(Float, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class DailyReportORM(Base):
     __tablename__ = "daily_reports"
     __table_args__ = (UniqueConstraint("user_id", "report_date", name="uq_user_report_date"),)

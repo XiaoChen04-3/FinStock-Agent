@@ -17,6 +17,7 @@ from fin_stock_agent.reporting.fund_fetcher import TushareFundFetcher
 from fin_stock_agent.reporting.models import DailyReport
 from fin_stock_agent.reporting.news_analysis_agent import NewsAnalysisAgent
 from fin_stock_agent.reporting.report_synthesis_agent import ReportSynthesisAgent
+from fin_stock_agent.services.daily_report_digest_service import DailyReportDigestService
 from fin_stock_agent.services.portfolio_service import PortfolioService
 from fin_stock_agent.stats.tracker import write_stats_event
 from fin_stock_agent.storage.cache import get_cache
@@ -37,6 +38,7 @@ class DailyReporter:
         self.fund_agent = FundAnalysisAgent()
         self.synthesis_agent = ReportSynthesisAgent()
         self.name_resolver = NameResolver()
+        self.digest_service = DailyReportDigestService()
 
     def resolve_report_date(self, date: str | None = None) -> str:
         return date or today_local_str()
@@ -242,3 +244,8 @@ class DailyReporter:
                     existing.stage2_tokens = report.stage2_tokens
                     existing.stage3_tokens = report.stage3_tokens
                     existing.elapsed_ms = elapsed_ms
+
+        try:
+            self.digest_service.write_digest(report)
+        except Exception:
+            pass
