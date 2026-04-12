@@ -9,40 +9,37 @@ from pydantic import BaseModel, field_validator
 
 
 class TradeRecord(BaseModel):
-    """A single buy/sell transaction extracted from conversation."""
-
     ts_code: str
     direction: Literal["buy", "sell"]
     quantity: float
     price: float
     fee: float = 0.0
-    trade_date: str = "unknown"  # YYYYMMDD or "unknown"
+    trade_date: str = "unknown"
     name: str | None = None
 
     @field_validator("ts_code")
     @classmethod
-    def normalise_code(cls, v: str) -> str:
-        return v.strip().upper()
+    def normalize_code(cls, value: str) -> str:
+        return value.strip().upper()
 
     @field_validator("trade_date")
     @classmethod
-    def normalise_date(cls, v: str) -> str:
-        v = v.strip().replace("-", "")
-        if v == "" or v.lower() == "unknown":
+    def normalize_date(cls, value: str) -> str:
+        v = value.strip().replace("-", "")
+        if not v or v.lower() == "unknown":
             return "unknown"
         return v
 
 
 class PortfolioMemory:
-    """
-    Session-scoped in-memory store for trade records.
-
-    Designed to be stored in Streamlit session_state and passed to tools via
-    a module-level accessor (set_active / get_active).
-    """
-
     def __init__(self) -> None:
         self._trades: list[TradeRecord] = []
+
+    @classmethod
+    def from_trades(cls, trades: list[TradeRecord]) -> "PortfolioMemory":
+        memory = cls()
+        memory._trades = list(trades)
+        return memory
 
     def add(self, record: TradeRecord) -> None:
         self._trades.append(record)
@@ -57,20 +54,18 @@ class PortfolioMemory:
         return len(self._trades) == 0
 
     def to_csv(self) -> str:
-        """Convert stored trades to CSV string suitable for pnl_calculator."""
         if not self._trades:
             return ""
         rows = []
-        for t in self._trades:
-            date = t.trade_date if t.trade_date != "unknown" else datetime.now().strftime("%Y%m%d")
+        for trade in self._trades:
             rows.append(
                 {
-                    "ts_code": t.ts_code,
-                    "trade_date": date,
-                    "direction": t.direction,
-                    "quantity": t.quantity,
-                    "price": t.price,
-                    "fee": t.fee,
+                    "ts_code": trade.ts_code,
+                    "trade_date": trade.trade_date if trade.trade_date != "unknown" else datetime.now().strftime("%Y%m%d"),
+                    "direction": trade.direction,
+                    "quantity": trade.quantity,
+                    "price": trade.price,
+                    "fee": trade.fee,
                 }
             )
         buf = io.StringIO()
@@ -78,43 +73,36 @@ class PortfolioMemory:
         return buf.getvalue()
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Human-readable DataFrame for Streamlit sidebar display."""
         if not self._trades:
-            return pd.DataFrame(
-                columns=["代码", "名称", "方向", "数量", "价格", "手续费", "日期"]
-            )
-        rows = []
-        for t in self._trades:
-            rows.append(
+            return pd.DataFrame(columns=["Code", "Name", "Direction", "Quantity", "Price", "Fee", "Date"])
+        return pd.DataFrame(
+            [
                 {
-                    "代码": t.ts_code,
-                    "名称": t.name or "",
-                    "方向": "买入" if t.direction == "buy" else "卖出",
-                    "数量": t.quantity,
-                    "价格": t.price,
-                    "手续费": t.fee,
-                    "日期": t.trade_date,
+                    "Code": trade.ts_code,
+                    "Name": trade.name or "",
+                    "Direction": trade.direction,
+                    "Quantity": trade.quantity,
+                    "Price": trade.price,
+                    "Fee": trade.fee,
+                    "Date": trade.trade_date,
                 }
-            )
-        return pd.DataFrame(rows)
+                for trade in self._trades
+            ]
+        )
 
     def to_trades_df(self) -> pd.DataFrame:
-        """Raw trades as DataFrame for pnl_calculator."""
         if not self._trades:
-            return pd.DataFrame(
-                columns=["ts_code", "trade_date", "direction", "quantity", "price", "fee"]
-            )
+            return pd.DataFrame(columns=["ts_code", "trade_date", "direction", "quantity", "price", "fee"])
         rows = []
-        for t in self._trades:
-            date = t.trade_date if t.trade_date != "unknown" else datetime.now().strftime("%Y%m%d")
+        for trade in self._trades:
             rows.append(
                 {
-                    "ts_code": t.ts_code,
-                    "trade_date": date,
-                    "direction": t.direction,
-                    "quantity": t.quantity,
-                    "price": t.price,
-                    "fee": t.fee,
+                    "ts_code": trade.ts_code,
+                    "trade_date": trade.trade_date if trade.trade_date != "unknown" else datetime.now().strftime("%Y%m%d"),
+                    "direction": trade.direction,
+                    "quantity": trade.quantity,
+                    "price": trade.price,
+                    "fee": trade.fee,
                 }
             )
         return pd.DataFrame(rows).sort_values(["trade_date", "ts_code"]).reset_index(drop=True)
@@ -123,9 +111,6 @@ class PortfolioMemory:
         return len(self._trades)
 
 
-# ---------------------------------------------------------------------------
-# Module-level active instance accessor (used by tools without import cycles)
-# ---------------------------------------------------------------------------
 _active: PortfolioMemory | None = None
 
 

@@ -1,57 +1,35 @@
-PLANNER_PROMPT = """你是一个金融分析任务规划器。
+PLANNER_PROMPT = """You are a planning assistant for a financial data agent.
 
-用户提出了一个需要多步骤完成的复杂问题，请将其分解为 **3~6 个清晰、独立、可由工具执行的步骤**。
+Break the user question into 3-6 concrete executable steps.
+Return only a JSON array of strings.
 
-## 输出格式（严格 JSON 数组，不要加其他内容）
-```json
-["步骤1：...", "步骤2：...", "步骤3：..."]
-```
-
-## 规划原则
-- 每个步骤应对应一次具体的数据查询或计算操作。
-- 步骤之间尽量独立，后一步可依赖前一步的结果。
-- 涉及持仓分析的步骤应先查持仓再查行情。
-- 步骤数量不超过 6 个，过于简单的子任务可合并。
-- 步骤描述应具体，例如「查询 600519.SH 最近30天日线行情」而非「查股票」。
-
-用户问题：{question}"""
+Question:
+{question}
+"""
 
 
-REPLANNER_PROMPT = """你是一个金融分析任务重规划器。
+REPLANNER_PROMPT = """You are replanning a failed financial analysis workflow.
 
-原始计划执行过程中出现了问题，请根据以下信息重新规划**剩余**步骤。
-
-## 原始计划
+Original plan:
 {original_plan}
 
-## 已完成的步骤及结果
+Completed steps and results:
 {completed_steps}
 
-## 失败原因
+Failure reason:
 {error_reason}
 
-## 要求
-- 只规划尚未完成的步骤（不要重复已完成的）。
-- 如果失败是因为数据权限/积分不足，跳过该步骤并说明。
-- 输出严格 JSON 数组格式，不加其他内容。
-- 如果剩余步骤不可行，返回空数组 `[]`。
-
-重新规划后的步骤："""
+Return only a JSON array for the remaining steps.
+"""
 
 
-FINALIZE_PROMPT = """你是一个专业的金融分析报告撰写助手。
+FINALIZE_PROMPT = """You are writing the final answer for a financial analysis workflow.
 
-根据以下多步骤分析的执行结果，为用户生成一份**完整、清晰、有洞察力**的综合分析报告。
-
-## 原始问题
+User question:
 {question}
 
-## 各步骤执行结果
+Step results:
 {step_results}
 
-## 报告要求
-1. 直接回答用户的原始问题，不要复述步骤列表。
-2. 将各步骤的数据结果有机整合，形成连贯叙述。
-3. 如某些步骤因权限不足未能获取数据，如实说明并给出替代建议。
-4. 用简体中文，条理清晰，数字精确引用工具返回值。
-5. 末尾加：「⚠️ 以上内容仅供学习研究，不构成投资建议。」"""
+Write a concise final answer in Simplified Chinese and mention missing data honestly.
+"""

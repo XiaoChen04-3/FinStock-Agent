@@ -71,24 +71,66 @@ def compute_pnl_from_trades(
     }
 
 
+def _latest_fund_nav(c, code: str, end: str, start: str) -> tuple[float | None, str | None]:
+    """Latest unit/adj NAV for an open-end fund (.OF) via ``fund_nav``."""
+    try:
+        df = c.call("fund_nav", ts_code=code, start_date=start, end_date=end)
+    except TushareRequestError:
+        return None, None
+    if df is None or df.empty:
+        return None, None
+    sort_col = "nav_date" if "nav_date" in df.columns else "ann_date"
+    if sort_col not in df.columns:
+        sort_col = df.columns[0]
+    row = df.sort_values(sort_col).iloc[-1]
+    nav = row.get("adj_nav")
+    if nav is None or (isinstance(nav, float) and nav != nav):
+        nav = row.get("unit_nav")
+    if nav is None or (isinstance(nav, float) and nav != nav):
+        nav = row.get("accum_nav")
+    if nav is None:
+        return None, None
+    nav_date = str(row.get("nav_date") or row.get("ann_date") or row.get(sort_col) or "")
+    return float(nav), nav_date
+
+
 def fetch_last_closes(
     ts_codes: list[str], end_hint: str | None = None
 ) -> tuple[dict[str, float], str]:
-    """Fetch the most-recent closing price for each ts_code via daily bars."""
+    """Latest tradable price per symbol.
+
+    - ``*.OF`` open-end funds: Tushare ``fund_nav`` (unit / adj NAV).
+    - Stocks / ETFs: ``daily`` K-line ``close``; if empty, try ``fund_nav`` as fallback.
+    """
     c = get_client()
     end = (end_hint or datetime.now().strftime("%Y%m%d")).replace("-", "")
     start = (datetime.strptime(end, "%Y%m%d") - pd.Timedelta(days=120)).strftime("%Y%m%d")
     out: dict[str, float] = {}
     last_dates: list[str] = []
-    for code in ts_codes:
+    for raw in ts_codes:
+        code = (raw or "").strip().upper()
+        if not code:
+            continue
         try:
+            if code.endswith(".OF"):
+                nav, nav_date = _latest_fund_nav(c, code, end, start)
+                if nav is not None:
+                    out[code] = nav
+                    if nav_date:
+                        last_dates.append(nav_date.replace("-", "")[:8])
+                continue
             df = c.call("daily", ts_code=code, start_date=start, end_date=end, use_cache=True)
+            if df is not None and not df.empty:
+                row = df.sort_values("trade_date").iloc[-1]
+                out[code] = float(row["close"])
+                last_dates.append(str(row["trade_date"]))
+                continue
+            nav, nav_date = _latest_fund_nav(c, code, end, start)
+            if nav is not None:
+                out[code] = nav
+                if nav_date:
+                    last_dates.append(nav_date.replace("-", "")[:8])
         except TushareRequestError:
             continue
-        if df is None or df.empty:
-            continue
-        row = df.sort_values("trade_date").iloc[-1]
-        out[code] = float(row["close"])
-        last_dates.append(str(row["trade_date"]))
     as_of = max(last_dates) if last_dates else end
     return out, as_of
