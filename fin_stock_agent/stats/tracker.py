@@ -184,4 +184,4 @@ def write_stats_event(
 
 def _append_jsonl_record(record: dict[str, Any]) -> None:
     with (settings.log_dir / "finstock_stats.jsonl").open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        handle.write(json.dumps(record, indent=2, ensure_ascii=False, default=str) + "\n\n")

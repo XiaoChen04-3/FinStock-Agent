@@ -66,6 +66,36 @@ class ConversationSummaryORM(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class UserMemoryProfileORM(Base):
+    __tablename__ = "user_memory_profiles"
+
+    user_id = Column(String(36), primary_key=True)
+    risk_level = Column(String(32), nullable=True)
+    investment_horizon = Column(String(32), nullable=True)
+    preferred_assets_json = Column(Text, nullable=True)
+    disliked_assets_json = Column(Text, nullable=True)
+    focus_themes_json = Column(Text, nullable=True)
+    answer_style_json = Column(Text, nullable=True)
+    decision_constraints_json = Column(Text, nullable=True)
+    watchlist_json = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class UserMemoryEventORM(Base):
+    __tablename__ = "user_memory_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), index=True)
+    session_id = Column(String(36), index=True)
+    turn_idx = Column(Integer, nullable=False)
+    event_type = Column(String(50), nullable=False)
+    summary = Column(String(300), nullable=False)
+    payload_json = Column(Text, nullable=True)
+    confidence = Column(Float, default=0.0)
+    source_text = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class StatRecordORM(Base):
     __tablename__ = "stat_records"
 

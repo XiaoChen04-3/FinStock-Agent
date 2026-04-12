@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import uuid
 from datetime import date, datetime
@@ -23,6 +24,9 @@ from fin_stock_agent.reporting.daily_reporter import DailyReporter
 from fin_stock_agent.reporting.fund_fetcher import TushareFundFetcher
 from fin_stock_agent.reporting.report_tasks import ensure_report_generation, get_report_task_snapshot
 from fin_stock_agent.services.portfolio_service import PortfolioService
+from fin_stock_agent.services.user_memory_service import UserMemoryService
+
+_logger = logging.getLogger(__name__)
 
 WELCOME_MESSAGE = (
     "你好，我是 FinStock-Agent。你可以问我股票、基金、指数和宏观数据；"
@@ -201,9 +205,8 @@ def _render_sidebar(user_id: str, preload_snapshot) -> None:
                 df_h = pd.DataFrame(holdings)
                 st.dataframe(df_h[[c for c in cols if c in df_h.columns]], width="stretch", hide_index=True)
         except Exception:
+            _logger.exception("sidebar get_holdings failed for user %s", user_id)
             st.warning("持仓数据暂时不可用，请稍后重试。")
-
-        st.divider()
 
 
 def _render_chat_tab(user_id: str, session_id: str) -> None:
@@ -366,32 +369,6 @@ def _render_report_tab(user_id: str) -> None:
     if report.market_context or report.top_news:
         _render_market_highlights(report)
 
-    if report.market_fund_ideas:
-        import pandas as pd
-
-        st.markdown("#### 今日建议关注基金")
-        ideas_df = pd.DataFrame(
-            [
-                {
-                    "主题": item.theme,
-                    "基金": item.fund_name,
-                    "代码": item.ts_code,
-                    "建议": "考虑布局" if item.action == "buy" else "优先关注",
-                    "置信度": f"{item.confidence:.0%}",
-                    "理由": item.reason,
-                }
-                for item in report.market_fund_ideas
-            ]
-        )
-        st.dataframe(ideas_df, width="stretch", hide_index=True)
-        for item in report.market_fund_ideas:
-            with st.expander(f"{item.fund_name} · {item.ts_code}", expanded=False):
-                st.markdown(item.reason)
-                if item.related_news:
-                    st.markdown("相关新闻")
-                    for title in item.related_news:
-                        st.markdown(f"- {title}")
-
     import pandas as pd
     import plotly.express as px
 
@@ -438,7 +415,7 @@ def _render_report_tab(user_id: str) -> None:
                     for risk in item.key_risks:
                         st.markdown(f"- {risk}")
     else:
-        st.info("当前暂无持仓，日报已根据市场主线给出可关注基金。")
+        st.info("当前暂无持仓，日报仅展示市场主线、重点新闻与情绪分析。")
 
     st.markdown(report.overall_summary)
     st.caption(report.disclaimer)
@@ -594,7 +571,7 @@ def _render_holdings_input_tab(user_id: str) -> None:
 
                         idx = trade_options[to_delete_label]
                         with get_session() as sess:
-                            rows = sess.execute(
+                            orm_rows = sess.execute(
                                 select(TradeRecordORM)
                                 .where(
                                     TradeRecordORM.user_id == user_id,
@@ -603,11 +580,13 @@ def _render_holdings_input_tab(user_id: str) -> None:
                                 .order_by(TradeRecordORM.trade_date.desc(), TradeRecordORM.id.desc())
                                 .limit(50)
                             ).scalars().all()
-                        if idx < len(rows):
-                            service.delete_trade(user_id, rows[idx].id)
+                            row_ids = [r.id for r in orm_rows]
+                        if idx < len(row_ids):
+                            service.delete_trade(user_id, row_ids[idx])
                             st.success("已删除。")
                             st.rerun()
     except Exception:
+        _logger.exception("holdings_input_tab get_holdings failed for user %s", user_id)
         st.warning("持仓数据暂时不可用，请稍后重试。")
 
 

@@ -14,6 +14,7 @@ def configure_application_logging() -> None:
             return
 
         logging.getLogger("fin_stock_agent").setLevel(logging.ERROR)
+        logging.getLogger("app_streamlit").setLevel(logging.DEBUG)
         logging.getLogger("apscheduler").setLevel(logging.ERROR)
         logging.getLogger("httpx").setLevel(logging.ERROR)
         logging.getLogger("httpcore").setLevel(logging.ERROR)

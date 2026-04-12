@@ -52,7 +52,7 @@ def test_report_tasks_deduplicate_background_generation(monkeypatch) -> None:
     assert len(calls) == 1
 
 
-def test_report_synthesis_keeps_market_ideas_and_holding_analysis(monkeypatch) -> None:
+def test_report_synthesis_keeps_holding_analysis_without_market_ideas(monkeypatch) -> None:
     def _raise(_role: str):
         raise RuntimeError("llm unavailable")
 
@@ -91,17 +91,6 @@ def test_report_synthesis_keeps_market_ideas_and_holding_analysis(monkeypatch) -
                 }
             }
         },
-        market_fund_ideas=[
-            {
-                "theme": "黄金",
-                "fund_name": "黄金ETF联接A",
-                "ts_code": "518880.OF",
-                "action": "watch",
-                "confidence": 0.74,
-                "reason": "黄金主题受当日高影响新闻驱动，适合列入重点观察。",
-                "related_news": ["黄金价格再度走强"],
-            }
-        ],
         holding_recommendations={
             "000001.OF": {
                 "action": "hold",
@@ -113,9 +102,8 @@ def test_report_synthesis_keeps_market_ideas_and_holding_analysis(monkeypatch) -
         elapsed_ms=12.5,
     )
 
-    assert report.market_fund_ideas[0].fund_name == "黄金ETF联接A"
     assert report.top_news[0]["title"] == "黄金价格再度走强"
-    assert "可关注基金" in report.overall_summary
+    assert "建议持有" in report.overall_summary
 
     status = report.fund_statuses[0]
     assert status.trend == "up"

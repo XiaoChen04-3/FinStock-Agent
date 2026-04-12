@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
 
 from langchain_core.messages import HumanMessage
 
 from fin_stock_agent.core.llm import get_llm, merge_token_usage
 from fin_stock_agent.core.time_utils import now_local
-from fin_stock_agent.reporting.models import DailyReport, FundDailyStatus, MarketFundIdea
+from fin_stock_agent.reporting.models import DailyReport, FundDailyStatus
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +32,11 @@ class ReportSynthesisAgent:
         holdings: list[dict],
         news_ctx: dict,
         fund_ctx: dict,
-        market_fund_ideas: list[dict] | None = None,
         holding_recommendations: dict | None = None,
         elapsed_ms: float,
     ) -> DailyReport:
         self.last_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         recs = holding_recommendations or {}
-        market_fund_ideas = market_fund_ideas or []
         statuses: list[FundDailyStatus] = []
         total_market_value = 0.0
         total_unrealized = 0.0
@@ -86,7 +83,7 @@ class ReportSynthesisAgent:
             )
 
         pct = total_unrealized / total_market_value if total_market_value else 0.0
-        overall_summary = self._fallback_summary(statuses, market_fund_ideas)
+        overall_summary = self._fallback_summary(statuses, news_ctx)
 
         try:
             llm = get_llm("report_synthesis")
@@ -95,7 +92,6 @@ class ReportSynthesisAgent:
                 "Return JSON only with keys overall_summary and market_context.\n"
                 "Keep overall_summary under 180 Chinese characters.\n\n"
                 f"Status rows: {json.dumps([item.model_dump() for item in statuses], ensure_ascii=False, default=str)}\n"
-                f"Market fund ideas: {json.dumps(market_fund_ideas, ensure_ascii=False, default=str)}\n"
                 f"News context: {json.dumps(news_ctx, ensure_ascii=False, default=str)}\n"
             )
             response = llm.invoke([HumanMessage(content=prompt)])
@@ -113,9 +109,9 @@ class ReportSynthesisAgent:
             logger.warning("ReportSynthesisAgent LLM failed: %s", exc)
             market_ctx = ""
 
-        ts = news_ctx.get("topic_summary") or {}
-        default_market_line = ts.get("market") or "No market context."
-        catalog = (ts.get("catalog") or "").strip()
+        topic_summary = news_ctx.get("topic_summary") or {}
+        default_market_line = topic_summary.get("market") or "No market context."
+        catalog = str(topic_summary.get("catalog") or "").strip()
         fallback_market_ctx = default_market_line if not catalog else default_market_line + "\n\n" + catalog
         market_context = market_ctx or fallback_market_ctx
 
@@ -133,26 +129,26 @@ class ReportSynthesisAgent:
             market_context=market_context,
             news_sentiment_label=news_ctx.get("sentiment_label", "unknown"),
             top_news=ranked_news,
-            market_fund_ideas=[MarketFundIdea.model_validate(item) for item in market_fund_ideas],
             total_elapsed_ms=elapsed_ms,
         )
 
-    def _fallback_summary(self, statuses: list[FundDailyStatus], market_fund_ideas: list[dict]) -> str:
+    def _fallback_summary(self, statuses: list[FundDailyStatus], news_ctx: dict) -> str:
         action_counts: dict[str, int] = {"buy": 0, "hold": 0, "sell": 0}
         for status in statuses:
             action_counts[status.action] = action_counts.get(status.action, 0) + 1
-        summary_parts = []
+
+        summary_parts: list[str] = []
         for action_key, label in _ACTION_LABEL.items():
             if action_counts.get(action_key, 0):
                 names = [status.name for status in statuses if status.action == action_key]
                 summary_parts.append(f"{label}: {', '.join(names)}")
-        if market_fund_ideas:
-            focus_names = [row.get("fund_name", "") for row in market_fund_ideas[:3] if row.get("fund_name")]
-            if focus_names:
-                summary_parts.append(f"可关注基金: {', '.join(focus_names)}")
         if summary_parts:
             return "；".join(summary_parts)
-        return "基于最新新闻分析，当前适合先关注市场主线与主题基金，再择机分批布局。"
+
+        market_line = str((news_ctx.get("topic_summary") or {}).get("market") or "").strip()
+        if market_line:
+            return market_line[:180]
+        return "基于今日新闻与市场主线，当前更适合先观察情绪变化与风险信号，再决定后续操作。"
 
     def _merge_reasoning(self, agentic_reasoning: str | None, fund_analysis: str | None) -> str:
         parts: list[str] = []

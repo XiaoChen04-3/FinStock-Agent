@@ -8,7 +8,13 @@ from sqlalchemy import select
 from fin_stock_agent.core.settings import settings
 from fin_stock_agent.stats.tracker import write_stats_event
 from fin_stock_agent.storage.database import get_session
-from fin_stock_agent.storage.models import ConversationSummaryORM, DailyReportORM, TradeRecordORM
+from fin_stock_agent.storage.models import (
+    ConversationSummaryORM,
+    DailyReportORM,
+    TradeRecordORM,
+    UserMemoryEventORM,
+    UserMemoryProfileORM,
+)
 
 
 class LocalUserService:
@@ -21,6 +27,8 @@ class LocalUserService:
             "legacy_user_count": 0,
             "trade_rows_migrated": 0,
             "conversation_rows_migrated": 0,
+            "memory_event_rows_migrated": 0,
+            "memory_profile_rows_migrated": 0,
             "report_rows_migrated": 0,
             "report_rows_deleted": 0,
         }
@@ -44,6 +52,28 @@ class LocalUserService:
             for row in conversation_rows:
                 row.user_id = canonical_user_id
             summary["conversation_rows_migrated"] = len(conversation_rows)
+
+            memory_event_rows = session.execute(
+                select(UserMemoryEventORM).where(UserMemoryEventORM.user_id.in_(legacy_user_ids))
+            ).scalars().all()
+            for row in memory_event_rows:
+                row.user_id = canonical_user_id
+            summary["memory_event_rows_migrated"] = len(memory_event_rows)
+
+            memory_profile_rows = session.execute(
+                select(UserMemoryProfileORM).where(UserMemoryProfileORM.user_id.in_(legacy_user_ids + [canonical_user_id]))
+            ).scalars().all()
+            if memory_profile_rows:
+                winner = self._pick_memory_profile_winner(memory_profile_rows, canonical_user_id)
+                if winner.user_id != canonical_user_id:
+                    winner.user_id = canonical_user_id
+                    summary["memory_profile_rows_migrated"] += 1
+                for row in memory_profile_rows:
+                    if row is winner:
+                        continue
+                    if row.user_id != canonical_user_id:
+                        summary["memory_profile_rows_migrated"] += 1
+                    session.delete(row)
 
             report_rows = session.execute(
                 select(DailyReportORM).where(
@@ -79,7 +109,13 @@ class LocalUserService:
 
     def _load_legacy_user_ids(self, session, canonical_user_id: str) -> list[str]:
         ids: set[str] = set()
-        for model in (TradeRecordORM, ConversationSummaryORM, DailyReportORM):
+        for model in (
+            TradeRecordORM,
+            ConversationSummaryORM,
+            DailyReportORM,
+            UserMemoryEventORM,
+            UserMemoryProfileORM,
+        ):
             rows = session.execute(select(model.user_id)).scalars().all()
             for user_id in rows:
                 if user_id and user_id != canonical_user_id:
@@ -96,3 +132,13 @@ class LocalUserService:
 
     def _report_sort_key(self, row: DailyReportORM) -> tuple[datetime, int]:
         return (row.created_at or datetime.min, row.id or 0)
+
+    def _pick_memory_profile_winner(
+        self,
+        rows: list[UserMemoryProfileORM],
+        canonical_user_id: str,
+    ) -> UserMemoryProfileORM:
+        canonical_rows = [row for row in rows if row.user_id == canonical_user_id]
+        if canonical_rows:
+            return max(canonical_rows, key=lambda row: row.updated_at or datetime.min)
+        return max(rows, key=lambda row: row.updated_at or datetime.min)

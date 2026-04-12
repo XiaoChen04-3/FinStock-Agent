@@ -25,16 +25,6 @@ class FundDailyStatus(BaseModel):
     related_news: list[str] = Field(default_factory=list)
 
 
-class MarketFundIdea(BaseModel):
-    theme: str
-    fund_name: str
-    ts_code: str
-    action: str = "watch"
-    confidence: float = 0.5
-    reason: str = ""
-    related_news: list[str] = Field(default_factory=list)
-
-
 class DailyReport(BaseModel):
     user_id: str
     report_date: str
@@ -49,7 +39,6 @@ class DailyReport(BaseModel):
     market_context: str
     news_sentiment_label: str
     top_news: list[dict]
-    market_fund_ideas: list[MarketFundIdea] = Field(default_factory=list)
     stage1_tokens: int = 0
     stage2_tokens: int = 0
     stage3_tokens: int = 0

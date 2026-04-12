@@ -145,11 +145,6 @@ def test_daily_reporter_logs_generation_event(monkeypatch, tmp_path) -> None:
             "run": lambda self, items, keywords, daily_briefing=None: {"daily_briefing_top10": []},
         },
     )()
-    reporter.market_opportunity_agent = type(
-        "MarketIdeas",
-        (),
-        {"last_usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}, "run": lambda self, briefing, limit=5: {"ideas": []}},
-    )()
     reporter.fund_fetcher = type("Fetcher", (), {"fetch_history": lambda self, codes, years=3: {}})()
     reporter.fund_agent = type(
         "FundAgent",
@@ -183,7 +178,6 @@ def test_daily_reporter_logs_generation_event(monkeypatch, tmp_path) -> None:
                 market_context="context",
                 news_sentiment_label="neutral",
                 top_news=[],
-                market_fund_ideas=[],
                 total_elapsed_ms=12.0,
             )
         },
@@ -199,10 +193,10 @@ def test_daily_reporter_logs_generation_event(monkeypatch, tmp_path) -> None:
     assert payload["user_id"] == "local-user"
     assert payload["holdings_count"] == 1
     assert payload["news_count"] == 0
-    assert payload["stage1_tokens"] == 41
+    assert payload["stage1_tokens"] == 36
     assert payload["stage2_tokens"] == 56
     assert payload["stage3_tokens"] == 36
-    assert payload["total_tokens"] == 133
+    assert payload["total_tokens"] == 128
 
 
 def test_startup_preload_logs_report_date_once(monkeypatch) -> None:
