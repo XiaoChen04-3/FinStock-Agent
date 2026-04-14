@@ -17,14 +17,10 @@ from fin_stock_agent.news.models import NewsItem
 
 logger = logging.getLogger(__name__)
 
-_MAX_FEED = 80
-
-
 def _feed_lines(items: list[NewsItem]) -> str:
     lines: list[str] = []
-    for i, it in enumerate(items[:_MAX_FEED], 1):
-        summ = (it.summary or "")[:240].replace("\n", " ")
-        lines.append(f"{i}. [{it.source}] {it.title}\n   摘要: {summ}")
+    for i, it in enumerate(items, 1):
+        lines.append(f"{i}. [{it.source}] {it.title}")
     return "\n".join(lines)
 
 
