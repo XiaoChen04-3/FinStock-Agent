@@ -71,7 +71,7 @@ def _build_cls_news_item(article: dict) -> NewsItem | None:
     title = article.get("title") or article.get("brief") or article.get("content") or ""
     summary = article.get("content") or article.get("brief") or ""
     return NewsItem(
-        title=str(title)[:200],
+        title=str(title)[:1000],
         summary=str(summary),
         url=f"https://www.cls.cn/detail/{article_id}",
         source="cls",
@@ -187,7 +187,7 @@ async def fetch_cls_telegraph(
 
 async def fetch_eastmoney_kuaixun(
     session: aiohttp.ClientSession,
-    max_pages: int = 5,
+    max_pages: int = 20,
     since: datetime | None = None,
 ) -> list[NewsItem]:
     """Eastmoney 7x24 news via simple page-number pagination."""
@@ -252,7 +252,7 @@ async def fetch_eastmoney_kuaixun(
 
 async def fetch_ths_kuaixun(
     session: aiohttp.ClientSession,
-    max_pages: int = 5,
+    max_pages: int = 20,
     since: datetime | None = None,
 ) -> list[NewsItem]:
     """THS 7x24 news via simple page-number pagination."""

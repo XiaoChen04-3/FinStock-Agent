@@ -82,7 +82,7 @@ class NewsReader:
         self.prune_cache(retain_trading_days=3)
 
         return NewsFetchResult(
-            items=kept[:200],
+            items=kept[:1000],
             fetched_sources=sorted(sources_seen),
         )
 

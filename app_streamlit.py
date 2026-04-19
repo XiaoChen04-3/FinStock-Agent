@@ -186,10 +186,11 @@ def _render_sidebar(user_id: str, preload_snapshot) -> None:
             st.caption("启动中正在后台检查历史持仓和日报缓存。")
         elif preload_snapshot.state == "completed" and preload_snapshot.payload:
             payload = preload_snapshot.payload
+            _rt = get_report_task_snapshot(user_id=user_id)
             st.caption(
                 f"已加载历史数据：{payload.get('holding_count', 0)} 个持仓，"
                 f"{payload.get('trade_count', 0)} 条交易，"
-                f"{'已有今日日报' if payload.get('has_existing_report') else '今日日报待生成'}。"
+                f"{'今日日报生成中' if _rt.state == 'running' else ('已有今日日报' if _rt.report_exists else '今日日报待生成')}。"
             )
         elif preload_snapshot.state == "failed":
             st.caption("历史数据加载暂时不可用，请稍后刷新重试。")

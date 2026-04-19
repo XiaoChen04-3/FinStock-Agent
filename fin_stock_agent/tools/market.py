@@ -66,7 +66,7 @@ def get_stock_price(
         df = client.call("daily", ts_code=ts_code.strip().upper(), start_date=start, end_date=end)
         if df is None or df.empty:
             return _payload(False, error=f"No daily data for {ts_code}")
-        return _payload(True, rows=len(df), data=df.head(200).to_dict(orient="records"))
+        return _payload(True, rows=len(df), data=df.head(500).to_dict(orient="records"))
     except TushareRequestError as exc:
         return _payload(False, error=str(exc))
 
