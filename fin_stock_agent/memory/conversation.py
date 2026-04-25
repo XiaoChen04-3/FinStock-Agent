@@ -117,8 +117,8 @@ class ConversationMemory:
             response = llm.invoke([HumanMessage(content=prompt)])
             if isinstance(response.content, str) and response.content.strip():
                 return response.content.strip().replace("\n", " ")[:200]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Turn summarization failed, using question prefix as fallback: %s", exc)
         return (question or "")[:50]
 
     def clear_user(self, user_id: str) -> None:

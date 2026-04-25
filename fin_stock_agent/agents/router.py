@@ -54,8 +54,8 @@ class _TokenCounter(BaseCallbackHandler):
                         completion_tokens += int(metadata.get("output_tokens", 0) or 0)
             self.prompt_tokens += prompt_tokens
             self.completion_tokens += completion_tokens
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("TokenCounter: failed to parse LLM token usage: %s", exc)
 
 
 class _ToolCapture(BaseCallbackHandler):

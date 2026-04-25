@@ -210,8 +210,8 @@ def _parse_json_value(text: str) -> Any:
         if start_obj >= 0 and end_obj > start_obj:
             try:
                 return json.loads(raw[start_obj:end_obj])
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as exc:
+                logger.warning("JSON brace-extraction fallback also failed: %s | raw snippet: %.120s", exc, raw)
         start_arr = raw.find("[")
         end_arr = raw.rfind("]") + 1
         if start_arr >= 0 and end_arr > start_arr:

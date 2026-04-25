@@ -186,4 +186,5 @@ logs/
 .data/
 .streamlit/
 .cursor/
+.codex/
 *.db

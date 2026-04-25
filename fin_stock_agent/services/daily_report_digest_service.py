@@ -89,7 +89,10 @@ class DailyReportDigestService:
                     existing.total_pnl_pct = digest.total_pnl_pct
                     existing.vec_id = digest.vec_id
         except IntegrityError:
-            pass
+            logger.debug(
+                "DailyReportDigest upsert: IntegrityError for user=%s date=%s (concurrent write or duplicate); skipping insert",
+                report.user_id, report.report_date,
+            )
 
         try:
             get_vector_store().upsert(

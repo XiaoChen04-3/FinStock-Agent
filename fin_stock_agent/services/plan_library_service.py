@@ -83,7 +83,8 @@ class PlanLibraryService:
                 row.last_used_at = datetime.utcnow()
                 try:
                     plan_steps = [str(item) for item in json.loads(row.plan_json)]
-                except Exception:
+                except Exception as exc:
+                    logger.warning("PlanLibrary: failed to parse plan_json for doc_id=%s: %s", row.chroma_doc_id, exc)
                     plan_steps = []
                 candidates.append(
                     PlanCandidate(
