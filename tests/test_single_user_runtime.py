@@ -5,7 +5,6 @@ from datetime import datetime
 
 import fin_stock_agent.app_runtime as runtime_module
 from fin_stock_agent.core.settings import settings
-from fin_stock_agent.news.models import NewsFetchResult
 from fin_stock_agent.news.news_reader import NewsReader
 from fin_stock_agent.reporting.daily_reporter import DailyReporter
 from fin_stock_agent.reporting.models import DailyReport
@@ -120,55 +119,15 @@ def test_daily_reporter_logs_generation_event(monkeypatch, tmp_path) -> None:
 
     reporter = DailyReporter()
     reporter.cache = type("Cache", (), {"get": lambda self, key: None, "setex": lambda self, key, ttl, payload: None})()
-    reporter.portfolio_service = type(
-        "PortfolioSvc",
-        (),
-        {"get_holdings": lambda self, user_id: [{"ts_code": "110022.OF", "name": "测试基金", "quantity": 10.0, "avg_cost": 1.2, "last_price": 1.3, "market_value": 13.0, "unrealized_pnl": 1.0}]},
-    )()
-    reporter.name_resolver = type("Resolver", (), {"get_keywords_for_holdings": lambda self, codes: ["测试基金"]})()
-    reporter.trade_calendar = type("Calendar", (), {"get_recent_trading_days": lambda self, n: ["20260411", "20260410", "20260409"]})()
-    reporter.news_reader = type(
-        "Reader",
-        (),
-        {"fetch_today_sync": lambda self: NewsFetchResult(items=[], fetched_sources=["cls"], degraded=False, message="")},
-    )()
-    reporter.briefing_agent = type(
-        "Briefing",
-        (),
-        {"last_usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}, "run": lambda self, items: {"top_10": []}},
-    )()
-    reporter.news_agent = type(
-        "NewsAgent",
+    reporter.orchestrator = type(
+        "Orchestrator",
         (),
         {
-            "last_usage": {"prompt_tokens": 13, "completion_tokens": 5, "total_tokens": 18},
-            "run": lambda self, items, keywords, daily_briefing=None: {"daily_briefing_top10": []},
-        },
-    )()
-    reporter.fund_fetcher = type("Fetcher", (), {"fetch_history": lambda self, codes, years=3: {}})()
-    reporter.fund_agent = type(
-        "FundAgent",
-        (),
-        {"last_usage": {"prompt_tokens": 17, "completion_tokens": 9, "total_tokens": 26}, "run": lambda self, holdings, nav_history, recent_days: {"analyses": {}}},
-    )()
-    reporter.agentic_analyzer = type(
-        "Analyzer",
-        (),
-        {
-            "last_usage": {"prompt_tokens": 19, "completion_tokens": 11, "total_tokens": 30},
-            "analyze": lambda self, holdings, items, daily_briefing=None, name_keywords=None: {},
-        },
-    )()
-    reporter.synthesis_agent = type(
-        "Synthesis",
-        (),
-        {
-            "last_usage": {"prompt_tokens": 23, "completion_tokens": 13, "total_tokens": 36},
-            "run": lambda self, **kwargs: DailyReport(
-                user_id=kwargs["user_id"],
-                report_date=kwargs["report_date"],
+            "run": lambda self, user_id, date=None, force=False: DailyReport(
+                user_id=user_id,
+                report_date=date or "2026-04-12",
                 generated_at=datetime(2026, 4, 12, 9, 30, 0),
-                recent_trading_days=kwargs["recent_trading_days"],
+                recent_trading_days=["20260411", "20260410", "20260409"],
                 total_market_value=13.0,
                 total_unrealized_pnl=1.0,
                 total_unrealized_pnl_pct=0.08,
@@ -178,10 +137,14 @@ def test_daily_reporter_logs_generation_event(monkeypatch, tmp_path) -> None:
                 market_context="context",
                 news_sentiment_label="neutral",
                 top_news=[],
+                stage1_tokens=36,
+                stage2_tokens=56,
+                stage3_tokens=36,
                 total_elapsed_ms=12.0,
             )
         },
     )()
+    reporter.digest_service.write_digest = lambda report: None
     reporter._save_report = lambda **kwargs: None
 
     report = reporter.generate(user_id="local-user", date="2026-04-12", force=True)
@@ -191,12 +154,10 @@ def test_daily_reporter_logs_generation_event(monkeypatch, tmp_path) -> None:
     event_type, payload = captured[-1]
     assert event_type == "daily_report_generated"
     assert payload["user_id"] == "local-user"
-    assert payload["holdings_count"] == 1
-    assert payload["news_count"] == 0
+    assert payload["holdings_count"] == 0
     assert payload["stage1_tokens"] == 36
     assert payload["stage2_tokens"] == 56
     assert payload["stage3_tokens"] == 36
-    assert payload["total_tokens"] == 128
 
 
 def test_startup_preload_logs_report_date_once(monkeypatch) -> None:

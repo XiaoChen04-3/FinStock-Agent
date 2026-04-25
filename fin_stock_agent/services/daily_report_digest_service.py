@@ -1,23 +1,28 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from fin_stock_agent.core.config import get_config
+from fin_stock_agent.memory.vector_store import get_vector_store
 from fin_stock_agent.reporting.models import DailyReport
 from fin_stock_agent.storage.database import get_session
 from fin_stock_agent.storage.models import DailyReportDigestORM
 
+logger = logging.getLogger(__name__)
 
-def _sentiment_emoji(label: str) -> str:
+
+def _sentiment_marker(label: str) -> str:
     return {
-        "bullish": "📈",
-        "watch": "👀",
-        "neutral": "➖",
-        "cautious": "⚠️",
-        "bearish": "📉",
+        "bullish": "[bullish]",
+        "watch": "[watch]",
+        "neutral": "[neutral]",
+        "cautious": "[cautious]",
+        "bearish": "[bearish]",
     }.get(label, "")
 
 
@@ -25,27 +30,26 @@ class DailyReportDigestService:
     """Extract and inject lightweight daily-report harnesses for memory context."""
 
     def write_digest(self, report: DailyReport) -> None:
-        """Extract a digest from a freshly generated DailyReport and persist it."""
         holdings_digest = []
         buy_count = hold_count = sell_count = 0
+        vec_id = f"{report.user_id}_{report.report_date}"
 
-        for fs in report.fund_statuses:
-            action = fs.action.lower()
+        for status in report.fund_statuses:
+            action = status.action.lower()
             if action == "buy":
                 buy_count += 1
             elif action == "sell":
                 sell_count += 1
             else:
                 hold_count += 1
-
             holdings_digest.append(
                 {
-                    "ts_code": fs.ts_code,
-                    "name": fs.name,
+                    "ts_code": status.ts_code,
+                    "name": status.name,
                     "action": action,
-                    "confidence": round(fs.confidence, 2),
-                    "trend": fs.trend,
-                    "key_risks": fs.key_risks[:2],
+                    "confidence": round(status.confidence, 2),
+                    "trend": status.trend,
+                    "key_risks": status.key_risks[:2],
                 }
             )
 
@@ -60,6 +64,7 @@ class DailyReportDigestService:
             hold_count=hold_count,
             sell_count=sell_count,
             total_pnl_pct=report.total_unrealized_pnl_pct if report.total_unrealized_pnl_pct else None,
+            vec_id=vec_id,
             created_at=datetime.utcnow(),
         )
 
@@ -71,7 +76,6 @@ class DailyReportDigestService:
                         DailyReportDigestORM.report_date == report.report_date,
                     )
                 ).scalar_one_or_none()
-
                 if existing is None:
                     session.add(digest)
                 else:
@@ -83,8 +87,19 @@ class DailyReportDigestService:
                     existing.hold_count = digest.hold_count
                     existing.sell_count = digest.sell_count
                     existing.total_pnl_pct = digest.total_pnl_pct
+                    existing.vec_id = digest.vec_id
         except IntegrityError:
             pass
+
+        try:
+            get_vector_store().upsert(
+                self._collection_name(report.user_id),
+                vec_id,
+                f"{report.overall_summary} {report.market_context}".strip(),
+                {"user_id": report.user_id, "report_date": report.report_date},
+            )
+        except Exception as exc:
+            logger.warning("Daily report digest vector upsert failed: %s", exc)
 
     def get_recent_digests(self, user_id: str, limit: int = 5) -> list[DailyReportDigestORM]:
         with get_session() as session:
@@ -103,12 +118,12 @@ class DailyReportDigestService:
 
         lines = [f"## Recent daily report digests (last {len(digests)} days)"]
         for row in digests:
-            emoji = _sentiment_emoji(row.sentiment_label or "")
-            sentiment = f"{emoji}[{row.sentiment_label}]" if row.sentiment_label else ""
+            marker = _sentiment_marker(row.sentiment_label or "")
+            sentiment = f"{marker}{row.sentiment_label}" if row.sentiment_label else ""
             summary_text = (row.overall_summary or "").replace("\n", " ")
-            line = f"- {row.report_date} {sentiment} {summary_text}"
+            line = f"- {row.report_date} {sentiment} {summary_text}".strip()
             if row.buy_count or row.hold_count or row.sell_count:
-                line += f"  (buy:{row.buy_count} hold:{row.hold_count} sell:{row.sell_count})"
+                line += f" (buy:{row.buy_count} hold:{row.hold_count} sell:{row.sell_count})"
 
             holdings_detail: list[str] = []
             if row.holdings_digest_json:
@@ -118,13 +133,45 @@ class DailyReportDigestService:
                         name = item.get("name") or item.get("ts_code", "")
                         action = item.get("action", "hold")
                         conf = item.get("confidence", 0.5)
-                        holdings_detail.append(f"{name}→{action}({conf})")
+                        holdings_detail.append(f"{name}->{action}({conf})")
                 except (json.JSONDecodeError, TypeError):
                     pass
-
             if holdings_detail:
                 line += "\n  " + ", ".join(holdings_detail)
-
             lines.append(line)
-
         return "\n".join(lines)
+
+    def search_relevant_digests(self, user_id: str, question: str) -> list[str]:
+        cfg = get_config().memory.semantic_search
+        try:
+            results = get_vector_store().search(
+                self._collection_name(user_id),
+                question,
+                top_k=cfg.digest_top_k,
+                threshold=cfg.similarity_threshold,
+            )
+            if results:
+                return [item.text for item in results]
+        except Exception as exc:
+            logger.warning("Digest semantic search failed, falling back: %s", exc)
+        rows = self.get_recent_digests(user_id=user_id, limit=cfg.time_fallback_limit)
+        return [
+            " ".join(part for part in [row.overall_summary or "", row.market_context or ""] if part).strip()
+            for row in rows
+        ]
+
+    def clear_user(self, user_id: str) -> None:
+        with get_session() as session:
+            rows = session.execute(
+                select(DailyReportDigestORM).where(DailyReportDigestORM.user_id == user_id)
+            ).scalars().all()
+            for row in rows:
+                session.delete(row)
+        try:
+            get_vector_store().delete_collection(self._collection_name(user_id))
+        except Exception:
+            logger.debug("Ignoring digest collection delete failure for %s", user_id)
+
+    @staticmethod
+    def _collection_name(user_id: str) -> str:
+        return f"{user_id}_digests"

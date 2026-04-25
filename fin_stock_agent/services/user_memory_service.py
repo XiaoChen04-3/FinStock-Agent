@@ -92,25 +92,25 @@ class UserMemoryService:
     def build_profile_context(self, user_id: str) -> str:
         profile = self.get_profile(user_id)
         if profile.is_empty():
-            return "## User profile memory\nNo persisted user profile yet."
+            return "## 用户画像记忆\n暂无用户画像，将以中性投资者画像分析。"
 
-        lines = ["## User profile memory"]
+        lines = ["## 用户画像记忆"]
         if profile.risk_level:
-            lines.append(f"- Risk level: {profile.risk_level}")
+            lines.append(f"- 风险偏好：{profile.risk_level}")
         if profile.investment_horizon:
-            lines.append(f"- Investment horizon: {profile.investment_horizon}")
+            lines.append(f"- 投资期限：{profile.investment_horizon}")
         if profile.focus_themes:
-            lines.append(f"- Focus themes: {', '.join(profile.focus_themes[:8])}")
+            lines.append(f"- 关注主题：{', '.join(profile.focus_themes[:8])}")
         if profile.preferred_assets:
-            lines.append(f"- Preferred assets: {', '.join(profile.preferred_assets[:8])}")
+            lines.append(f"- 偏好资产：{', '.join(profile.preferred_assets[:8])}")
         if profile.disliked_assets:
-            lines.append(f"- Avoided assets: {', '.join(profile.disliked_assets[:8])}")
+            lines.append(f"- 规避资产：{', '.join(profile.disliked_assets[:8])}")
         if profile.answer_style:
-            lines.append(f"- Answer style: {', '.join(profile.answer_style[:8])}")
+            lines.append(f"- 回答风格：{', '.join(profile.answer_style[:8])}")
         if profile.decision_constraints:
-            lines.append(f"- Constraints: {', '.join(profile.decision_constraints[:8])}")
+            lines.append(f"- 投资约束：{', '.join(profile.decision_constraints[:8])}")
         if profile.watchlist:
-            lines.append(f"- Watchlist: {', '.join(profile.watchlist[:8])}")
+            lines.append(f"- 自选标的：{', '.join(profile.watchlist[:8])}")
         return "\n".join(lines)
 
     def build_recent_events_context(self, user_id: str, limit: int = 6) -> str:

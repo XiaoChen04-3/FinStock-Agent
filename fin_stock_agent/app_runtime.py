@@ -2,16 +2,22 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Lock
 from typing import Any
 
+_TASK_TTL_HOURS = 4
+
+from fin_stock_agent.core.config import get_config
 from fin_stock_agent.reporting.daily_reporter import DailyReporter
 from fin_stock_agent.stats.tracker import write_stats_event
 from fin_stock_agent.services.local_user_service import LocalUserService
 from fin_stock_agent.services.portfolio_service import PortfolioService
 
-_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="app-runtime")
+_EXECUTOR = ThreadPoolExecutor(
+    max_workers=get_config().concurrency.daily_report_workers,
+    thread_name_prefix="app-runtime",
+)
 _LOCK = Lock()
 _PRELOAD_TASKS: dict[str, "_TrackedPreload"] = {}
 
@@ -111,7 +117,15 @@ def _run_preload(user_id: str, report_date: str) -> dict[str, Any]:
     return payload
 
 
+def _evict_expired_locked() -> None:
+    cutoff = datetime.now() - timedelta(hours=_TASK_TTL_HOURS)
+    expired = [k for k, t in _PRELOAD_TASKS.items() if t.finished_at is not None and t.finished_at < cutoff]
+    for k in expired:
+        del _PRELOAD_TASKS[k]
+
+
 def _refresh_locked(key: str) -> None:
+    _evict_expired_locked()
     task = _PRELOAD_TASKS.get(key)
     if task is None or task.finished_at is not None:
         return

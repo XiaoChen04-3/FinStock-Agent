@@ -15,6 +15,7 @@ import streamlit as st
 
 from fin_stock_agent.agents.router import stream_agent
 from fin_stock_agent.app_bootstrap import ensure_app_bootstrap
+from fin_stock_agent.core.config import AppConfig
 from fin_stock_agent.app_runtime import get_local_user_id
 from fin_stock_agent.core.logging_utils import configure_application_logging
 from fin_stock_agent.init.name_resolver import NameResolver
@@ -27,6 +28,7 @@ from fin_stock_agent.services.portfolio_service import PortfolioService
 from fin_stock_agent.services.user_memory_service import UserMemoryService
 
 _logger = logging.getLogger(__name__)
+AppConfig.load()
 
 WELCOME_MESSAGE = (
     "你好，我是 FinStock-Agent。你可以问我股票、基金、指数和宏观数据；"

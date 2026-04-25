@@ -20,7 +20,7 @@ def test_user_memory_service_remember_turn_extracts_profile_and_events() -> None
         user_id=user_id,
         session_id="session-1",
         turn_idx=1,
-        question="以后默认用简洁风格回答，我是稳健投资者，重点关注黄金和红利，不要推荐具体股票，继续跟踪 510300.SH。",
+        question="以后默认用简洁风格回答，我是稳健投资者，重点关注黄金和红利，不要推荐具体股票，继续跟踪510300.SH。",
         answer="好的，我后续会按这个偏好来分析。",
     )
 
@@ -31,13 +31,13 @@ def test_user_memory_service_remember_turn_extracts_profile_and_events() -> None
     assert profile.risk_level == "稳健"
     assert "黄金" in profile.focus_themes
     assert "红利" in profile.focus_themes
-    assert "简洁" in profile.answer_style
+    assert "简洁" in "".join(profile.answer_style)
     assert "不要推荐具体股票" in profile.decision_constraints
     assert "510300.SH" in profile.watchlist
     assert len(events) >= 4
 
 
-def test_memory_manager_context_includes_profile_and_event_memory() -> None:
+def test_memory_manager_context_includes_profile_and_prompt_memory() -> None:
     init_db()
     user_id = f"memory-context-{uuid.uuid4()}"
     manager = MemoryManager(user_id=user_id, session_id="session-2")
@@ -48,14 +48,15 @@ def test_memory_manager_context_includes_profile_and_event_memory() -> None:
         "收到，后续我会按这个风格回答。",
     )
 
-    context = manager.build_context_block()
+    context = manager.build_context_block("看看我的组合")
+    prompt_context = manager.build_prompt_memory_block("看看我的组合")
 
-    assert "## User profile memory" in context
-    assert "Risk level: 保守" in context
-    assert "Focus themes: 黄金" in context
-    assert "Answer style: 结论先行, 风险提示" in context
-    assert "## Recent memory events" in context
-    assert "用户风险偏好更新为保守" in context
+    assert "## 用户画像记忆" in context
+    assert "风险偏好：保守" in context
+    assert "关注主题：黄金" in context
+    assert "## 投资者画像" in prompt_context
+    assert "风险偏好：保守" in prompt_context
+    assert "## 近期摘要" in prompt_context
 
 
 def test_prep_session_includes_persisted_memory_context(monkeypatch) -> None:
@@ -89,9 +90,8 @@ def test_prep_session_includes_persisted_memory_context(monkeypatch) -> None:
     )
 
     system_message = messages[0].content
-    assert "## User profile memory" in system_message
-    assert "Focus themes: 红利, 银行" in system_message
-    assert "Answer style: 表格" in system_message
+    assert "## 用户画像记忆" in system_message
+    assert "关注主题：红利, 银行" in system_message
 
 
 def test_local_user_service_migrates_user_memory_rows() -> None:

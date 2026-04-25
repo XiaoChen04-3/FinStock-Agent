@@ -1,0 +1,104 @@
+# FinStock-Agent 统一运行时配置示例文件
+# 复制此文件为 config.yaml 并按需修改后使用。
+
+# ─────────────────────────────────────────────
+# 各 Agent 角色使用的 LLM 模型名称
+# 填写 OpenAI 兼容接口所支持的模型标识符
+# ─────────────────────────────────────────────
+models:
+  query_enhancer: "qwen3.5-flash"        # 问题改写与意图增强模型（轻量、低延迟）
+  conversation_summarizer: "qwen3.5-flash" # 对话摘要模型（单轮摘要、输出精简）
+  react_agent: "qwen3.6-plus"            # ReAct 主问答模型（工具调用能力强）
+  planner: "qwen3-max"                   # 规划器模型（生成多步计划，开启 thinking）
+  replanner: "qwen3-max"                 # 重新规划模型（失败后重拟剩余步骤）
+  executor: "qwen3.6-plus"               # 执行器模型（逐步调用工具执行计划步骤）
+  finalizer: "qwen3.6-plus"              # 汇总模型（将所有步骤结果整合为最终答案）
+  news_filter: "qwen3.5-flash"           # 新闻过滤 / 日报摘要模型
+  sentiment_analysis: "qwen3.6-plus"     # 市场情绪分析模型
+  fund_trend: "qwen3.5-flash"            # 基金趋势分析模型
+  holding_correlation: "qwen3.6-plus"    # 持仓关联分析与操作建议模型
+  report_generation: "qwen3.6-plus"      # 日报综合生成模型
+  embedding: "text-embedding-4"          # 向量嵌入模型（用于语义搜索）
+
+# ─────────────────────────────────────────────
+# 记忆系统参数
+# ─────────────────────────────────────────────
+memory:
+  # 注入 LLM System Prompt 的记忆上下文最大字符数（超出时按优先级截断）
+  prompt_memory_max_chars: 2000
+
+  semantic_search:
+    # 对话摘要向量检索返回条数上限
+    conversation_top_k: 5
+    # 日报摘要向量检索返回条数上限
+    digest_top_k: 3
+    # 向量检索失败时降级为时序查询的条数上限
+    time_fallback_limit: 5
+    # 向量相似度阈值（低于此值的结果不返回），范围 [0, 1]
+    similarity_threshold: 0.70
+
+  plan_library:
+    # 计划复用阈值：相似度超过此值时直接复用历史计划，范围 [0, 1]
+    reuse_threshold: 0.90
+    # 计划参考阈值：相似度超过此值时作为参考传给 Planner，范围 [0, 1]
+    reference_threshold: 0.82
+    # 计划最低质量分数：低于此分数的计划不保存到库，范围 [0, 1]
+    min_quality_score: 0.50
+    # 每位用户最多保存的历史计划条数，超出时淘汰使用次数最少的记录
+    max_records_per_user: 500
+
+  vector_store:
+    # 向量库后端类型，目前支持 "chromadb"
+    backend: "chromadb"
+    # 向量库最大记录总数（跨所有 collection）
+    max_total_records: 5000
+
+# ─────────────────────────────────────────────
+# 每日报告生成参数
+# ─────────────────────────────────────────────
+daily_report:
+  # 每次日报生成时抓取的新闻条数上限
+  news_fetch_limit: 50
+  # 日报精选新闻 Top-N 条数（展示给用户的重点新闻数量）
+  briefing_top_n: 10
+  # 个性化推送新闻条数（与持仓相关的新闻数量）
+  personalized_news_top_n: 5
+  # 净值历史数据拉取年数（用于计算近 N 年收益）
+  nav_history_years: 3
+  # 近期交易日天数（用于过滤历史新闻和净值数据范围）
+  recent_trading_days: 3
+  # 日报缓存有效期（小时），超出后下次请求重新生成
+  cache_ttl_hours: 12
+  # 日报 overall_summary 字段最大字符数（超出时截断）
+  report_summary_max_chars: 180
+
+# ─────────────────────────────────────────────
+# 规划执行（Plan-and-Execute）参数
+# ─────────────────────────────────────────────
+plan_execute:
+  # Planner 生成的最大步骤数
+  max_plan_steps: 6
+  # Planner 生成的最小步骤数（低于此值时使用问题本身作为单步计划）
+  min_plan_steps: 2
+  # 执行过程中允许的最大连续错误次数，超出后触发 fallback 直接回答
+  max_errors_before_fallback: 3
+  # 传给 Planner 的记忆上下文最大字符数
+  context_max_chars: 2000
+
+# ─────────────────────────────────────────────
+# 本地测试 API 服务器参数（tools/cli_test.py 使用）
+# ─────────────────────────────────────────────
+test_api:
+  # 测试 API 监听地址
+  host: "127.0.0.1"
+  # 测试 API 监听端口（范围 1024~65535）
+  port: 8765
+
+# ─────────────────────────────────────────────
+# 并发控制参数
+# ─────────────────────────────────────────────
+concurrency:
+  # 每轮对话结束后异步任务（记忆保存、统计写入）的线程池大小
+  post_turn_workers: 4
+  # 日报生成后台线程池大小（影响并发生成日报的最大数量）
+  daily_report_workers: 2

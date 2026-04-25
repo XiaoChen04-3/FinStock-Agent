@@ -79,31 +79,37 @@ def test_plan_execute_nodes_use_configured_roles(monkeypatch) -> None:
     planned = plan_execute._planner_node(
         {
             "question": "analyze",
+            "context": "ctx",
             "plan": [],
             "past_steps": [],
             "response": None,
             "error_count": 0,
             "fallback_triggered": False,
+            "similar_plans": [],
         }
     )
     replanned = plan_execute._replan_node(
         {
             "question": "analyze",
+            "context": "ctx",
             "plan": ["step one"],
             "past_steps": [("step one", "[ERROR] bad tool")],
             "response": None,
             "error_count": 1,
             "fallback_triggered": False,
+            "similar_plans": [],
         }
     )
     finalized = plan_execute._finalize_node(
         {
             "question": "analyze",
+            "context": "ctx",
             "plan": ["step one"],
             "past_steps": [("step one", "done")],
             "response": None,
             "error_count": 0,
             "fallback_triggered": False,
+            "similar_plans": [],
         }
     )
 

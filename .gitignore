@@ -129,6 +129,7 @@ celerybeat.pid
 
 # Environments
 .env
+config.yaml
 .finstock_cache.sqlite
 .venv
 env/
@@ -185,3 +186,4 @@ logs/
 .data/
 .streamlit/
 .cursor/
+*.db

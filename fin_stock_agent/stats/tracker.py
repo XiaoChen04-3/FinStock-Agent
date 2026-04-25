@@ -7,12 +7,16 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from fin_stock_agent.core.llm import describe_agent_chain
+from fin_stock_agent.core.config import get_config
 from fin_stock_agent.core.settings import settings
 from fin_stock_agent.core.time_utils import local_now_iso
 from fin_stock_agent.storage.database import get_session
 from fin_stock_agent.storage.models import StatRecordORM
 
-_PERSIST_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="stats-persist")
+_PERSIST_EXECUTOR = ThreadPoolExecutor(
+    max_workers=get_config().concurrency.post_turn_workers,
+    thread_name_prefix="stats-persist",
+)
 
 
 @dataclass

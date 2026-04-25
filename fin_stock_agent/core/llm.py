@@ -8,6 +8,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 
+from fin_stock_agent.core.config import get_config
 from fin_stock_agent.core.settings import settings
 
 
@@ -20,35 +21,53 @@ class LLMProfile:
 
 DEFAULT_LLM_ROLE = "default"
 
-LLM_ROLE_PROFILES: dict[str, LLMProfile] = {
-    DEFAULT_LLM_ROLE: LLMProfile(model=settings.openai_model, temperature=0.2),
-    "query_enhancer": LLMProfile(model="qwen3.5-flash", temperature=0.0),
-    "react": LLMProfile(model="qwen3.6-plus", temperature=0.2),
-    "planner": LLMProfile(
-        model="qwen3-max",
-        temperature=0.2,
-        extra_body={"enable_thinking": True},
-    ),
-    "replan": LLMProfile(
-        model="qwen3-max",
-        temperature=0.2,
-        extra_body={"enable_thinking": True},
-    ),
-    "executor": LLMProfile(model="qwen3.6-plus", temperature=0.2),
-    "finalize": LLMProfile(model="qwen3.6-plus", temperature=0.2),
-    "daily_briefing": LLMProfile(model="qwen3.5-flash", temperature=0.2),
-    "news_analysis": LLMProfile(model="qwen3.6-plus", temperature=0.2),
-    "fund_analysis": LLMProfile(model="qwen3.5-flash", temperature=0.2),
-    "agentic_news": LLMProfile(model="qwen3.6-plus", temperature=0.2),
-    "report_synthesis": LLMProfile(model="qwen3.6-plus", temperature=0.2),
-    "json_repair": LLMProfile(model="qwen3.5-flash", temperature=0.0),
+_ROLE_MODEL_KEY = {
+    DEFAULT_LLM_ROLE: "react_agent",
+    "query_enhancer": "query_enhancer",
+    "conversation_summarizer": "conversation_summarizer",
+    "react": "react_agent",
+    "planner": "planner",
+    "replan": "replanner",
+    "executor": "executor",
+    "finalize": "finalizer",
+    "daily_briefing": "news_filter",
+    "news_analysis": "sentiment_analysis",
+    "fund_analysis": "fund_trend",
+    "agentic_news": "holding_correlation",
+    "report_synthesis": "report_generation",
+    "json_repair": "query_enhancer",
+}
+
+_ROLE_DEFAULTS: dict[str, dict[str, Any]] = {
+    DEFAULT_LLM_ROLE: {"temperature": 0.2},
+    "query_enhancer": {"temperature": 0.0},
+    "conversation_summarizer": {"temperature": 0.0},
+    "react": {"temperature": 0.2},
+    "planner": {"temperature": 0.2, "extra_body": {"enable_thinking": True}},
+    "replan": {"temperature": 0.2, "extra_body": {"enable_thinking": True}},
+    "executor": {"temperature": 0.2},
+    "finalize": {"temperature": 0.2},
+    "daily_briefing": {"temperature": 0.2},
+    "news_analysis": {"temperature": 0.2},
+    "fund_analysis": {"temperature": 0.2},
+    "agentic_news": {"temperature": 0.2},
+    "report_synthesis": {"temperature": 0.2},
+    "json_repair": {"temperature": 0.0},
 }
 
 
 def get_llm_profile(role: str = DEFAULT_LLM_ROLE) -> LLMProfile:
-    if role not in LLM_ROLE_PROFILES:
+    if role not in _ROLE_MODEL_KEY:
         raise KeyError(f"Unknown llm role: {role}")
-    return LLM_ROLE_PROFILES[role]
+    model_key = _ROLE_MODEL_KEY[role]
+    cfg = get_config()
+    model_name = getattr(cfg.models, model_key)
+    defaults = _ROLE_DEFAULTS.get(role, {})
+    return LLMProfile(
+        model=model_name,
+        temperature=float(defaults.get("temperature", 0.2)),
+        extra_body=dict(defaults.get("extra_body", {})),
+    )
 
 
 def role_uses_thinking(role: str) -> bool:
@@ -75,6 +94,11 @@ def _get_cached_llm(role: str, temperature_key: str):
 
     temperature = None if temperature_key == "__default__" else float(temperature_key)
     return ChatOpenAI(**build_llm_kwargs(role, temperature=temperature))
+
+
+def clear_llm_cache() -> None:
+    """清除 LLM 实例缓存，在配置重置后（如测试环境）调用以确保使用最新配置。"""
+    _get_cached_llm.cache_clear()
 
 
 def get_llm(role: str = DEFAULT_LLM_ROLE, *, temperature: float | None = None):
@@ -197,10 +221,14 @@ def _parse_json_value(text: str) -> Any:
 
 def _repair_json_value(raw_text: str, *, config: dict[str, Any] | None = None) -> Any:
     prompt = (
-        "你是一个 JSON 格式修复专家。"
-        "请将用户提供的内容修复为标准 JSON，"
-        "并包裹在一个对象里，格式固定为 {\"payload\": <修复后的JSON值>}。"
-        "只输出该 JSON 对象，不要输出解释。"
+        "你是 JSON 格式修复专家。\n"
+        "任务：将用户提供的文本（可能含有 Markdown 代码块、多余说明文字或格式错误）修复为合法的 JSON，"
+        "并将修复结果包裹在固定格式的外层对象中：{\"payload\": <修复后的JSON值>}。\n"
+        "规则：\n"
+        "1. 仅输出该 JSON 对象，严禁输出任何解释、注释或额外内容。\n"
+        "2. 保持原始数据的类型和结构（对象/数组/字符串/数字）不变，不得增删字段。\n"
+        "3. 若文本中包含多个 JSON 片段，以最外层或最完整的为准。\n"
+        "4. 若无法识别任何有效的 JSON 结构，返回 {\"payload\": null}，不得抛出错误。"
     )
     runnable = get_llm("json_repair").bind(response_format={"type": "json_object"})
     response = runnable.invoke(
@@ -225,11 +253,13 @@ def invoke_json(role: str, messages: list[BaseMessage], *, config: dict[str, Any
 
 
 def describe_agent_chain(agent_mode: str) -> str:
+    cfg = get_config()
     if agent_mode == "react":
-        return "query_enhancer=qwen3.5-flash; react=qwen3.6-plus"
+        return f"query_enhancer={cfg.models.query_enhancer}; react={cfg.models.react_agent}"
     if agent_mode == "plan_execute":
         return (
-            "query_enhancer=qwen3.5-flash; planner/replan=qwen3-max(enable_thinking=true,streaming,json-repair); "
-            "executor/finalize=qwen3.6-plus"
+            f"query_enhancer={cfg.models.query_enhancer}; "
+            f"planner/replan={cfg.models.planner}(enable_thinking=true,streaming,json-repair); "
+            f"executor/finalize={cfg.models.executor}"
         )
     return get_llm_profile(DEFAULT_LLM_ROLE).model

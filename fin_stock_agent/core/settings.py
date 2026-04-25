@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 try:
@@ -42,12 +43,13 @@ class Settings:
         self.openai_base_url: str = _strip(
             os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         )
-        self.openai_model: str = _strip(os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+        self.openai_model: str = _strip(os.getenv("OPENAI_MODEL"))
 
+        default_db_name = "finstock_test.db" if self._is_pytest_runtime() else "finstock.db"
         self.database_url: str = _strip(
             os.getenv(
                 "DATABASE_URL",
-                f"sqlite:///{(self.data_dir / 'finstock.db').as_posix()}",
+                f"sqlite:///{(self.data_dir / default_db_name).as_posix()}",
             )
         )
         self.redis_url: str = _strip(os.getenv("REDIS_URL", "fakeredis://local"))
@@ -57,6 +59,10 @@ class Settings:
 
     def is_configured(self) -> bool:
         return bool(self.openai_api_key and self.tushare_token)
+
+    @staticmethod
+    def _is_pytest_runtime() -> bool:
+        return "pytest" in sys.modules or bool(os.getenv("PYTEST_CURRENT_TEST"))
 
 
 settings = Settings()

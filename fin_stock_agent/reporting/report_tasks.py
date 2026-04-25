@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Lock
 
+_TASK_TTL_HOURS = 6
+
+from fin_stock_agent.core.config import get_config
 from fin_stock_agent.stats.tracker import write_stats_event
 
-_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="daily-report")
+_EXECUTOR = ThreadPoolExecutor(
+    max_workers=get_config().concurrency.daily_report_workers,
+    thread_name_prefix="daily-report",
+)
 _LOCK = Lock()
 _TASKS: dict[str, "_TrackedTask"] = {}
 
@@ -111,7 +117,15 @@ def _run_generate(user_id: str, report_date: str, force: bool) -> None:
         raise
 
 
+def _evict_expired_locked() -> None:
+    cutoff = datetime.now() - timedelta(hours=_TASK_TTL_HOURS)
+    expired = [k for k, t in _TASKS.items() if t.finished_at is not None and t.finished_at < cutoff]
+    for k in expired:
+        del _TASKS[k]
+
+
 def _refresh_locked(key: str) -> None:
+    _evict_expired_locked()
     task = _TASKS.get(key)
     if task is None or task.finished_at is not None:
         return

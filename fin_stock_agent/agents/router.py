@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
@@ -11,6 +12,7 @@ from langchain_core.outputs import LLMResult
 
 from fin_stock_agent.agents.plan_execute import build_plan_execute_agent
 from fin_stock_agent.agents.react_agent import build_react_agent, extract_last_ai_text
+from fin_stock_agent.core.config import get_config
 from fin_stock_agent.core.exceptions import AgentRoutingError
 from fin_stock_agent.core.identity import local_profile_id
 from fin_stock_agent.core.query_enhancer import EnhancedQuery, enhance_query
@@ -18,21 +20,20 @@ from fin_stock_agent.core.time_utils import now_local
 from fin_stock_agent.init.name_resolver import NameResolver
 from fin_stock_agent.memory.portfolio_memory import PortfolioMemory, get_active, set_active
 from fin_stock_agent.services.memory_manager import MemoryManager
+from fin_stock_agent.services.plan_library_service import PlanLibraryService
 from fin_stock_agent.services.portfolio_service import PortfolioService
 from fin_stock_agent.stats.tracker import StatsTracker
 from fin_stock_agent.tools.portfolio import set_tool_user_id
 
-_POST_TURN_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="post-turn")
+logger = logging.getLogger(__name__)
+_POST_TURN_EXECUTOR = ThreadPoolExecutor(
+    max_workers=get_config().concurrency.post_turn_workers,
+    thread_name_prefix="post-turn",
+)
 
 
 class _TokenCounter(BaseCallbackHandler):
-    """Accumulates token usage from every LLM call in a request.
-
-    Works for both streaming and non-streaming paths:
-    - Non-streaming: llm_output["token_usage"] is populated directly.
-    - Streaming with stream_usage=True: llm_output is None but
-      generation.message.usage_metadata has the counts.
-    """
+    """Accumulates token usage from every LLM call in a request."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -41,33 +42,24 @@ class _TokenCounter(BaseCallbackHandler):
 
     def on_llm_end(self, response: LLMResult, **kwargs) -> None:
         try:
-            # Path 1: non-streaming — token_usage in llm_output
             usage = (response.llm_output or {}).get("token_usage", {})
-            pt = usage.get("prompt_tokens", 0)
-            ct = usage.get("completion_tokens", 0)
-
-            # Path 2: streaming with stream_usage=True — usage in message metadata
-            if pt == 0 and ct == 0:
-                for gen_list in (response.generations or []):
+            prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+            if prompt_tokens == 0 and completion_tokens == 0:
+                for gen_list in response.generations or []:
                     for gen in gen_list:
-                        msg = getattr(gen, "message", None)
-                        if msg is not None:
-                            um = getattr(msg, "usage_metadata", None) or {}
-                            pt += um.get("input_tokens", 0)
-                            ct += um.get("output_tokens", 0)
-
-            self.prompt_tokens += pt
-            self.completion_tokens += ct
+                        message = getattr(gen, "message", None)
+                        metadata = getattr(message, "usage_metadata", None) or {}
+                        prompt_tokens += int(metadata.get("input_tokens", 0) or 0)
+                        completion_tokens += int(metadata.get("output_tokens", 0) or 0)
+            self.prompt_tokens += prompt_tokens
+            self.completion_tokens += completion_tokens
         except Exception:
             pass
 
 
 class _ToolCapture(BaseCallbackHandler):
-    """Records the name of every tool invoked during a request.
-
-    Works for both ReAct streaming and Plan-and-Execute paths as long as
-    this callback is included in the config passed to every agent invocation.
-    """
+    """Records the name of every tool invoked during a request."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -128,10 +120,14 @@ def _prep_session(
         get_active()
     set_tool_user_id(user_id)
     resolver = NameResolver()
-    eq = enhance_query(question, resolver=resolver, callbacks=callbacks)
+    try:
+        eq = enhance_query(question, resolver=resolver, callbacks=callbacks)
+    except Exception as exc:
+        logger.warning("Query enhancement failed, using raw question: %s", exc)
+        eq = EnhancedQuery(original=question, rewritten=question)
     mode = classify_mode(eq)
     memory_manager = MemoryManager(user_id=user_id, session_id=session_id)
-    system_context = memory_manager.build_context_block()
+    system_context = memory_manager.build_context_block(eq.rewritten or question)
     messages = [
         SystemMessage(
             content="\n\n".join(
@@ -144,7 +140,7 @@ def _prep_session(
         )
     ]
     messages.extend(list(history_messages or []))
-    messages.append(HumanMessage(content=eq.rewritten))
+    messages.append(HumanMessage(content=eq.rewritten or question))
     return mode, messages, eq, memory_manager
 
 
@@ -167,6 +163,83 @@ def _persist_turn_async(
     _POST_TURN_EXECUTOR.submit(_task)
 
 
+def _build_plan_execute_seed(
+    *,
+    user_id: str,
+    question: str,
+    eq: EnhancedQuery,
+    memory_manager: MemoryManager,
+) -> dict:
+    cfg = get_config()
+    plan_service = PlanLibraryService()
+    rewritten_question = eq.rewritten or question
+    context_parts = [memory_manager.build_prompt_memory_block(rewritten_question), eq.to_context_block()]
+    context_block = "\n\n".join(part for part in context_parts if part).strip()
+    context_block = context_block[: cfg.plan_execute.context_max_chars]
+
+    candidates = plan_service.search_plans(user_id, rewritten_question, top_k=3)
+    similar_plans: list[dict] = []
+    reusable_plan: list[str] = []
+    if candidates:
+        best = candidates[0]
+        if best.similarity >= cfg.memory.plan_library.reuse_threshold and best.plan_steps:
+            reusable_plan = list(best.plan_steps)
+            similar_plans = [_candidate_to_dict(best)]
+        elif best.similarity >= cfg.memory.plan_library.reference_threshold:
+            similar_plans = [_candidate_to_dict(item) for item in candidates]
+
+    return {
+        "question": rewritten_question,
+        "context": context_block,
+        "plan": reusable_plan,
+        "past_steps": [],
+        "response": None,
+        "error_count": 0,
+        "fallback_triggered": False,
+        "similar_plans": similar_plans,
+    }
+
+
+def _candidate_to_dict(candidate) -> dict:
+    return {
+        "plan_steps": list(candidate.plan_steps),
+        "quality_score": candidate.quality_score,
+        "similarity": candidate.similarity,
+        "question_text": candidate.question_text,
+    }
+
+
+def _maybe_persist_plan_async(user_id: str, question_text: str, state: dict) -> None:
+    if not question_text.strip():
+        return
+
+    def _task() -> None:
+        score = _score_plan_quality(state)
+        if score < get_config().memory.plan_library.min_quality_score:
+            return
+        try:
+            PlanLibraryService().save_plan(user_id, question_text, list(state.get("plan") or []), score)
+        except Exception as exc:
+            logger.warning("Plan library save failed: %s", exc)
+
+    _POST_TURN_EXECUTOR.submit(_task)
+
+
+def _score_plan_quality(state: dict) -> float:
+    response = str(state.get("response") or "").strip()
+    if not response:
+        return 0.0
+    score = 1.0
+    if state.get("fallback_triggered"):
+        score -= 0.5
+    error_steps = [item for item in state.get("past_steps", []) if str(item[1]).startswith("[ERROR]")]
+    if len(error_steps) > 1:
+        score -= 0.3
+    if state.get("error_count", 0) > 0:
+        score -= 0.2
+    return max(0.0, min(1.0, score))
+
+
 def run_agent(
     question: str,
     *,
@@ -177,7 +250,7 @@ def run_agent(
 ) -> str:
     user_id = user_id or local_profile_id()
     session_id = session_id or str(uuid.uuid4())
-    mode, messages, _, memory_manager = _prep_session(
+    mode, messages, eq, memory_manager = _prep_session(
         question,
         user_id=user_id,
         session_id=session_id,
@@ -192,17 +265,11 @@ def run_agent(
             return answer
         except Exception as exc:
             raise AgentRoutingError(str(exc)) from exc
-    result = build_plan_execute_agent().invoke(
-        {
-            "question": question,
-            "plan": [],
-            "past_steps": [],
-            "response": None,
-            "error_count": 0,
-            "fallback_triggered": False,
-        }
-    )
+
+    seed = _build_plan_execute_seed(user_id=user_id, question=question, eq=eq, memory_manager=memory_manager)
+    result = build_plan_execute_agent().invoke(seed)
     answer = result.get("response") or ""
+    _maybe_persist_plan_async(user_id, seed["question"], result)
     memory_manager.after_turn((len(history_messages or []) // 2) + 1, question, answer)
     return answer
 
@@ -213,36 +280,27 @@ def _stream_react(
     token_counter: _TokenCounter,
     tool_capture: _ToolCapture,
 ) -> Generator[tuple[str, str], None, None]:
-    """Stream a ReAct agent, yielding (event_type, content) pairs.
-
-    Token counting and tool capture are handled via callbacks; do NOT also read
-    chunk.usage_metadata or you will double-count tokens.
-    Tool names are collected by tool_capture and transferred to the tracker by
-    the caller after the generator is exhausted.
-    """
-    # pending_tools maps chunk-index → tool-name for UI event ordering only
     pending_tools: dict[int, str] = {}
     desc_map = _tool_desc_map()
     try:
         agent = build_react_agent()
-        _cbs = [token_counter, tool_capture]
+        callbacks = [token_counter, tool_capture]
         for chunk, _meta in agent.stream(
             {"messages": msgs},
             stream_mode="messages",
-            config={"callbacks": _cbs},
+            config={"callbacks": callbacks},
         ):
             if isinstance(chunk, AIMessageChunk):
                 if chunk.tool_call_chunks:
                     for tc in chunk.tool_call_chunks:
                         name = tc.get("name") or ""
-                        idx: int = tc.get("index") or 0
+                        idx = int(tc.get("index") or 0)
                         if name and idx not in pending_tools:
                             pending_tools[idx] = name
                             yield ("tool_start", name)
                 elif chunk.content and isinstance(chunk.content, str):
                     yield ("token", chunk.content)
             elif isinstance(chunk, ToolMessage):
-                # Pop the first pending tool (sequential ReAct always calls one at a time)
                 if pending_tools:
                     first_idx = min(pending_tools)
                     tool_name = pending_tools.pop(first_idx)
@@ -274,7 +332,6 @@ def stream_agent(
     user_id = user_id or local_profile_id()
     session_id = session_id or str(uuid.uuid4())
     tracker = StatsTracker(session_id=session_id, query_text=question, user_id=user_id)
-
     master_counter = _TokenCounter()
     tool_capture = _ToolCapture()
 
@@ -288,7 +345,7 @@ def stream_agent(
             callbacks=[master_counter],
         )
     except Exception as exc:
-        yield ("error", f"Initialization failed: {exc}")
+        yield ("error", f"初始化失败：{exc}")
         tracker.finish(has_error=True)
         return
 
@@ -302,24 +359,19 @@ def stream_agent(
         history_message_count=len(history_messages or []),
     )
 
-    yield ("mode", "ReAct" if mode == "react" else "Plan-and-Execute")
-    yield ("thinking", f"意图识别: {eq.intent_label()} ({eq.intent.value})")
-
-    # Show query rewrite when it differs from the original
+    yield ("mode", "ReAct" if mode == "react" else "规划执行")
+    yield ("thinking", f"意图识别：{eq.intent_label()}（{eq.intent.value}）")
     if eq.rewritten and eq.rewritten.strip() != question.strip():
-        yield ("thinking", f"查询改写: {eq.rewritten}")
-
+        yield ("thinking", f"问题改写：{eq.rewritten}")
     if eq.resolved_codes:
-        yield ("thinking", "名称映射: " + json.dumps(eq.resolved_codes, ensure_ascii=False))
+        yield ("thinking", "代码解析：" + json.dumps(eq.resolved_codes, ensure_ascii=False))
     if eq.suggested_tools:
-        yield ("thinking", "推荐工具: " + ", ".join(eq.suggested_tools))
+        yield ("thinking", "建议工具：" + "、".join(eq.suggested_tools))
 
     if mode == "react":
         answer_parts: list[str] = []
         had_error = False
-        for event_type, content in _stream_react(
-            messages, tracker, master_counter, tool_capture
-        ):
+        for event_type, content in _stream_react(messages, tracker, master_counter, tool_capture):
             if event_type == "token":
                 answer_parts.append(content)
             if event_type == "error":
@@ -331,12 +383,12 @@ def stream_agent(
         tracker.data.completion_tokens = master_counter.completion_tokens
         for name in tool_capture.tools:
             tracker.add_tool(name)
-
-        # Summary thinking line
-        p, c = master_counter.prompt_tokens, master_counter.completion_tokens
-        if p or c:
-            yield ("thinking", f"Token 消耗: {p} prompt + {c} completion = {p + c} 合计")
-
+        if tracker.data.prompt_tokens or tracker.data.completion_tokens:
+            total = tracker.data.prompt_tokens + tracker.data.completion_tokens
+            yield (
+                "thinking",
+                f"Token 消耗：输入 {tracker.data.prompt_tokens} + 输出 {tracker.data.completion_tokens} = 合计 {total}",
+            )
         if answer:
             yield ("answer", answer)
         _persist_turn_async(
@@ -351,46 +403,51 @@ def stream_agent(
 
     try:
         graph = build_plan_execute_agent()
+        seed = _build_plan_execute_seed(user_id=user_id, question=question, eq=eq, memory_manager=memory_manager)
+        if seed["plan"]:
+            yield ("thinking", "命中高相似历史计划，直接复用。")
+            for index, step in enumerate(seed["plan"], 1):
+                yield ("thinking", f"步骤 {index}：{step}")
+        elif seed["similar_plans"]:
+            yield ("thinking", "规划器已获取相似历史计划作为参考。")
+
         final_answer = ""
-        for event in graph.stream(
-            {
-                "question": question,
-                "plan": [],
-                "past_steps": [],
-                "response": None,
-                "error_count": 0,
-                "fallback_triggered": False,
-            },
-            stream_mode="updates",
-            config={"callbacks": [master_counter, tool_capture]},
-        ):
-            if "planner" in event:
-                plan = event["planner"].get("plan") or []
-                for idx, step in enumerate(plan, 1):
-                    yield ("thinking", f"步骤 {idx}: {step}")
-            elif "executor" in event:
-                past_steps = event["executor"].get("past_steps") or []
-                if past_steps:
-                    step, result = past_steps[-1]
-                    yield ("thinking", f"{step} => {str(result)[:120]}")
-            elif "replan" in event:
-                yield ("thinking", "正在重新规划剩余步骤")
-            elif "fallback" in event:
-                final_answer = event["fallback"].get("response") or ""
-            elif "finalize" in event:
-                final_answer = event["finalize"].get("response") or ""
+        final_state: dict = dict(seed)
+        for event in graph.stream(seed, stream_mode="updates", config={"callbacks": [master_counter, tool_capture]}):
+            for node_name, payload in event.items():
+                if isinstance(payload, dict):
+                    final_state.update(payload)
+                if node_name == "planner":
+                    plan = payload.get("plan") or []
+                    for index, step in enumerate(plan, 1):
+                        yield ("thinking", f"步骤 {index}：{step}")
+                elif node_name == "executor":
+                    past_steps = payload.get("past_steps") or []
+                    if past_steps:
+                        step, result = past_steps[-1]
+                        yield ("thinking", f"{step} => {str(result)[:120]}")
+                elif node_name == "replan":
+                    yield ("thinking", "已重新规划剩余步骤。")
+                elif node_name == "fallback":
+                    final_answer = payload.get("response") or ""
+                elif node_name == "finalize":
+                    final_answer = payload.get("response") or ""
 
         tracker.data.prompt_tokens = master_counter.prompt_tokens
         tracker.data.completion_tokens = master_counter.completion_tokens
         for name in tool_capture.tools:
             tracker.add_tool(name)
-
-        p, c = master_counter.prompt_tokens, master_counter.completion_tokens
-        if p or c:
-            yield ("thinking", f"Token 消耗: {p} prompt + {c} completion = {p + c} 合计")
+        if tracker.data.prompt_tokens or tracker.data.completion_tokens:
+            total = tracker.data.prompt_tokens + tracker.data.completion_tokens
+            yield (
+                "thinking",
+                f"Token 消耗：输入 {tracker.data.prompt_tokens} + 输出 {tracker.data.completion_tokens} = 合计 {total}",
+            )
 
         if final_answer:
+            final_state["response"] = final_answer
             yield ("answer", final_answer)
+            _maybe_persist_plan_async(user_id, seed["question"], final_state)
             _persist_turn_async(
                 memory_manager=memory_manager,
                 history_messages=history_messages,
@@ -400,12 +457,12 @@ def stream_agent(
                 has_error=False,
             )
         else:
-            yield ("error", "Plan-and-Execute returned no final answer")
+            yield ("error", "规划执行模式未生成最终答案")
             tracker.finish(has_error=True)
     except Exception as exc:
         tracker.data.prompt_tokens = master_counter.prompt_tokens
         tracker.data.completion_tokens = master_counter.completion_tokens
         for name in tool_capture.tools:
             tracker.add_tool(name)
-        yield ("error", f"Plan-and-Execute failed: {exc}")
+        yield ("error", f"规划执行失败：{exc}")
         tracker.finish(has_error=True)

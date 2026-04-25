@@ -140,10 +140,10 @@ class PortfolioService:
             return cached
         holdings = self.get_holdings(user_id)
         if not holdings:
-            return "## Current portfolio\nNo persisted holdings yet."
+            return "## 当前持仓\n暂无持仓记录。"
         lines = [
-            "## Current portfolio",
-            "| Code | Name | Quantity | Avg Cost | Last Price | PnL |",
+            "## 当前持仓",
+            "| 代码 | 名称 | 份额 | 成本均价 | 最新净值 | 浮动盈亏 |",
             "|---|---|---:|---:|---:|---:|",
         ]
         total_market_value = 0.0
@@ -156,8 +156,8 @@ class PortfolioService:
                 f"{row['avg_cost']:.4f} | {row['last_price'] or '-'} | {row['unrealized_pnl'] or 0.0:.2f} |"
             )
         lines.append("")
-        lines.append(f"Total market value: {total_market_value:.2f}")
-        lines.append(f"Total unrealized pnl: {total_unrealized:.2f}")
+        lines.append(f"总市值：{total_market_value:.2f}")
+        lines.append(f"总浮动盈亏：{total_unrealized:.2f}")
         context = "\n".join(lines)
         self.cache.setex(cache_key, 600, context)
         return context

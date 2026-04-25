@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from fin_stock_agent.core.config import AppConfig
 from fin_stock_agent.core.settings import settings
 from fin_stock_agent.init.data_preloader import DataPreloader
 from fin_stock_agent.init.env_wizard import EnvWizard
@@ -14,6 +15,7 @@ class SystemInit:
         self.wizard = EnvWizard()
 
     def check_and_setup(self) -> bool:
+        AppConfig.load()
         init_db()
         if not settings.is_configured():
             return self.wizard.render()

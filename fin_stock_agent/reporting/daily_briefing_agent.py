@@ -1,100 +1,124 @@
-"""DailyBriefingAgent — pick the ~10 most market-moving headlines for the day.
-
-Uses the LLM when available; otherwise falls back to recency ordering.
-Output feeds the daily report ``market_context`` and the agentic analyzer.
-"""
 from __future__ import annotations
 
-import json
 import logging
-import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage
 
 from fin_stock_agent.core.llm import get_llm, merge_token_usage
 from fin_stock_agent.news.models import NewsItem
+from fin_stock_agent.prompts.reporting_prompts import NEWS_BRIEFING_PROMPT
+from fin_stock_agent.reporting.report_models import AgentResult, AgentTimer, ReportContext
 
 logger = logging.getLogger(__name__)
 
+
 def _feed_lines(items: list[NewsItem]) -> str:
-    lines: list[str] = []
-    for i, it in enumerate(items, 1):
-        lines.append(f"{i}. [{it.source}] {it.title}")
-    return "\n".join(lines)
+    return "\n".join(f"{index}. [{item.source}] {item.title}" for index, item in enumerate(items, 1))
 
 
-class DailyBriefingAgent:
+class NewsFilterAgent:
     def __init__(self) -> None:
         self.last_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-    def run(self, news_items: list[NewsItem]) -> dict[str, Any]:
+    def run(self, ctx: ReportContext) -> AgentResult:
+        timer = AgentTimer()
         self.last_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        if not news_items:
-            return {
-                "summary": "今日暂无抓取到新闻。",
-                "top_10": [],
-                "markdown_catalog": "",
-            }
+        if not ctx.news_items:
+            return AgentResult(
+                agent_name="news_filter",
+                status="fallback",
+                output={
+                    "top_news": [],
+                    "personalized_news": [],
+                    "briefing_summary": "No news items were available for the selected date.",
+                    "markdown_catalog": "",
+                },
+                elapsed_ms=timer.elapsed_ms(),
+            )
 
+        ranked = self._rank_news(ctx)
+        top_news = [self._serialize_item(item) for item, _score in ranked[: ctx.config.briefing_top_n]]
+        personalized = [self._serialize_item(item) for item, _score in ranked if self._relevance_score(ctx, item) > 0][
+            : ctx.config.personalized_news_top_n
+        ]
+
+        summary = self._llm_summary(ctx.news_items) or self._fallback_summary(top_news)
+        output = {
+            "top_news": top_news,
+            "personalized_news": personalized,
+            "briefing_summary": summary,
+            "markdown_catalog": self._to_markdown(summary, top_news),
+        }
+        return AgentResult(
+            agent_name="news_filter",
+            status="success",
+            output=output,
+            token_usage=dict(self.last_usage),
+            elapsed_ms=timer.elapsed_ms(),
+        )
+
+    def _rank_news(self, ctx: ReportContext) -> list[tuple[NewsItem, float]]:
+        items = ctx.news_items[: ctx.config.news_fetch_limit]
+        ranked: list[tuple[NewsItem, float]] = []
+        for index, item in enumerate(items):
+            importance_score = max(0.0, (10 - min(index, 9)) / 10)
+            relevance_score = self._relevance_score(ctx, item)
+            total_score = 0.6 * importance_score + 0.4 * relevance_score
+            ranked.append((item, total_score))
+        ranked.sort(key=lambda pair: pair[1], reverse=True)
+        return ranked
+
+    def _relevance_score(self, ctx: ReportContext, item: NewsItem) -> float:
+        keywords = list(ctx.user_profile.focus_themes)
+        keywords.extend(holding.get("name", "") for holding in ctx.holdings)
+        keywords.extend(ctx.user_profile.watchlist)
+        blob = f"{item.title} {item.summary}".lower()
+        matched = 0
+        for keyword in keywords:
+            normalized = str(keyword or "").strip().lower()
+            if normalized and normalized in blob:
+                matched += 1
+        return min(1.0, matched * 0.25)
+
+    def _llm_summary(self, items: list[NewsItem]) -> str:
         try:
             llm = get_llm("daily_briefing", temperature=0.2)
-            prompt = (
-                "你是财经主编。下面是从财联社/东财/同花顺抓取的今日快讯列表（含标题与摘要）。\n"
-                "请选出对**当日A股与基金市场**影响最大的10条，按影响从大到小排序。\n"
-                "输出**仅**一个 JSON 对象，字段如下：\n"
-                '{"summary":"用2-3句中文概括当日市场氛围与主线",'
-                '"top_10":[{"rank":1,"title":"原文标题","impact":1-5,"reason":"一句话为何重要","source":"cls|eastmoney|ths"}'
-                ",...]}\n\n"
-                + _feed_lines(news_items)
-            )
-            resp = llm.invoke([HumanMessage(content=prompt)])
-            self.last_usage = merge_token_usage(resp)
-            raw = resp.content if isinstance(resp.content, str) else ""
-            raw = re.sub(r"```(?:json)?", "", raw).strip()
-            s, e = raw.find("{"), raw.rfind("}") + 1
-            if s >= 0 and e > s:
-                data = json.loads(raw[s:e])
-                top = data.get("top_10") or []
-                summary = str(data.get("summary") or "").strip() or "已生成当日要闻目录。"
-                return {
-                    "summary": summary,
-                    "top_10": top,
-                    "markdown_catalog": _to_markdown(summary, top),
-                }
+            prompt = NEWS_BRIEFING_PROMPT.format(news_feed=_feed_lines(items[:10]))
+            response = llm.invoke([HumanMessage(content=prompt)])
+            self.last_usage = merge_token_usage(response)
+            text = getattr(response, "content", "")
+            if isinstance(text, str) and text.strip():
+                return text.strip()[:180]
         except Exception as exc:
-            logger.warning("DailyBriefingAgent LLM failed: %s", exc)
+            logger.warning("NewsFilterAgent 摘要生成失败，降级使用规则摘要: %s", exc)
+        return ""
 
-        return _fallback(news_items)
+    @staticmethod
+    def _fallback_summary(top_news: list[dict]) -> str:
+        if not top_news:
+            return "暂无重要市场新闻。"
+        titles = "；".join(item["title"] for item in top_news[:3])
+        return f"今日市场焦点：{titles}"
+
+    @staticmethod
+    def _serialize_item(item: NewsItem) -> dict:
+        return {
+            "title": item.title,
+            "source": item.source,
+            "time": item.published_at.isoformat() if item.published_at else "",
+        }
+
+    @staticmethod
+    def _to_markdown(summary: str, top_news: list[dict]) -> str:
+        lines = [summary, "", "重点新闻："]
+        for index, item in enumerate(top_news, 1):
+            meta = " | ".join(part for part in [item.get("source", ""), item.get("time", "")] if part)
+            if meta:
+                lines.append(f"{index}. {item['title']} [{meta}]")
+            else:
+                lines.append(f"{index}. {item['title']}")
+        return "\n".join(lines)
 
 
-def _to_markdown(summary: str, top_10: list[dict]) -> str:
-    parts = [f"**当日要点**  {summary}", "", "**重点十条**"]
-    for row in top_10[:10]:
-        r = row.get("rank", 0)
-        t = row.get("title", "")
-        imp = row.get("impact", "")
-        why = row.get("reason", "")
-        src = row.get("source", "")
-        parts.append(f"{r}. **{t}**  [{src}]  影响:{imp}/5 — {why}")
-    return "\n".join(parts)
-
-
-def _fallback(items: list[NewsItem]) -> dict[str, Any]:
-    top = []
-    for i, it in enumerate(items[:10], 1):
-        top.append(
-            {
-                "rank": i,
-                "title": it.title,
-                "impact": 3,
-                "reason": "按抓取顺序（LLM 不可用）",
-                "source": it.source,
-            }
-        )
-    summary = f"共 {len(items)} 条快讯；以下为按时间优先的十条摘要。"
-    return {
-        "summary": summary,
-        "top_10": top,
-        "markdown_catalog": _to_markdown(summary, top),
-    }
+DailyBriefingAgent = NewsFilterAgent

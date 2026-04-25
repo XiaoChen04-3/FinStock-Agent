@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import fin_stock_agent.reporting.report_synthesis_agent as synthesis_module
 import fin_stock_agent.reporting.report_tasks as task_module
+from fin_stock_agent.reporting.models import DailyReport
 from fin_stock_agent.reporting.report_synthesis_agent import ReportSynthesisAgent
 
 
@@ -53,7 +54,7 @@ def test_report_tasks_deduplicate_background_generation(monkeypatch) -> None:
 
 
 def test_report_synthesis_keeps_holding_analysis_without_market_ideas(monkeypatch) -> None:
-    def _raise(_role: str):
+    def _raise(_role: str, temperature=None):
         raise RuntimeError("llm unavailable")
 
     monkeypatch.setattr(synthesis_module, "get_llm", _raise)

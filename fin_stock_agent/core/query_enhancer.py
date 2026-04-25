@@ -78,28 +78,42 @@ class EnhancedQuery(BaseModel):
         return "\n".join(lines)
 
 
-PROMPT = """You are rewriting and classifying a financial user query.
+PROMPT = """你是 FinStock-Agent 的查询意图分析助手，负责对用户的中文金融问题进行改写与结构化分类。
 
-Return one JSON object with these fields:
-- intent
-- rewritten
-- resolved_codes
-- sub_queries
-- suggested_tools
-- keywords
-- complexity
+## 任务
+分析用户问题，输出一个标准 JSON 对象。严禁输出 JSON 以外的任何内容（包括解释、注释、Markdown 代码块）。
 
-Allowed intents:
-stock_info, stock_price, stock_fundamentals, technical, fund_info, fund_nav,
-index_price, global_market, macro, portfolio_query, portfolio_trade, news,
-comprehensive, general_chat
+## 输出 JSON 字段说明
+- intent（字符串）：问题的主意图，必须从下方意图表中选择其中一个值。
+- rewritten（字符串）：改写后的标准查询，补全缺省词语、消除歧义（如"贵州茅台"→"贵州茅台(600519.SH)"）；若无需改写则与原问题保持一致。
+- resolved_codes（对象）："实体名称 → 证券代码"的映射，仅填写可从候选项中确认的映射；无法确认时返回空对象 {{}}。
+- sub_queries（字符串数组）：对复杂问题的子问题拆解列表；简单问题返回空数组 []。
+- suggested_tools（字符串数组）：建议优先调用的工具名称列表；不确定时返回空数组 []。
+- keywords（字符串数组）：问题中的核心实体关键词（如股票名称、指标名、行业名）。
+- complexity（字符串）：问题复杂度，必须是 "simple"（单一直接问题）或 "complex"（需多步骤或多工具分析）。
 
-Complexity must be simple or complex.
+## 意图类型表
+| intent 值             | 适用场景                                         |
+|-----------------------|--------------------------------------------------|
+| stock_info            | 股票基本信息（上市日期、行业分类、公司简介等）   |
+| stock_price           | 股票实时行情或历史K线价格                        |
+| stock_fundamentals    | 股票财务基本面（PE、PB、ROE、营收、净利润等）    |
+| technical             | 技术指标分析（均线、MACD、RSI、布林带等）        |
+| fund_info             | 基金基本信息（类型、规模、基金经理、费率等）     |
+| fund_nav              | 基金净值查询（单位净值、累计净值、历史净值）     |
+| index_price           | 指数行情（沪深300、上证指数、创业板指等）        |
+| global_market         | 全球市场（美股、港股、原油、黄金、汇率等）       |
+| macro                 | 宏观经济数据（CPI、PPI、GDP、M2、PMI等）         |
+| portfolio_query       | 用户持仓查询、盈亏分析、持仓结构统计             |
+| portfolio_trade       | 持仓操作（记录买入/卖出、更新持仓）              |
+| news                  | 财经新闻、市场资讯、公告、研报摘要               |
+| comprehensive         | 综合分析（同时涉及行情、基本面、新闻等多维度）   |
+| general_chat          | 通用问答、投资知识科普或无法归类的问题           |
 
-Resolved code candidates from local resolver:
+## 候选证券代码（本地解析结果）
 {resolved_candidates}
 
-Question:
+## 用户问题
 {question}
 """
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base
@@ -14,7 +14,7 @@ class TradeCalendarRecord(Base):
     cal_date = Column(String(8), primary_key=True)
     is_open = Column(Boolean, default=False, nullable=False)
     exchange = Column(String(10), default="SSE")
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class IndexLookupRecord(Base):
@@ -24,7 +24,7 @@ class IndexLookupRecord(Base):
     name = Column(String(100), nullable=False)
     market = Column(String(20), nullable=True)
     category = Column(String(50), nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class FundLookupRecord(Base):
@@ -35,7 +35,7 @@ class FundLookupRecord(Base):
     fund_type = Column(String(50), nullable=True)
     status = Column(String(10), nullable=True)
     market = Column(String(10), nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class TradeRecordORM(Base):
@@ -50,7 +50,7 @@ class TradeRecordORM(Base):
     price = Column(Float, nullable=False)
     fee = Column(Float, default=0.0)
     trade_date = Column(String(8), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     is_deleted = Column(Boolean, default=False)
 
 
@@ -63,7 +63,8 @@ class ConversationSummaryORM(Base):
     turn_idx = Column(Integer, nullable=False)
     question = Column(String(500), nullable=True)
     summary = Column(String(200), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    vec_id = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class UserMemoryProfileORM(Base):
@@ -78,7 +79,7 @@ class UserMemoryProfileORM(Base):
     answer_style_json = Column(Text, nullable=True)
     decision_constraints_json = Column(Text, nullable=True)
     watchlist_json = Column(Text, nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class UserMemoryEventORM(Base):
@@ -93,7 +94,7 @@ class UserMemoryEventORM(Base):
     payload_json = Column(Text, nullable=True)
     confidence = Column(Float, default=0.0)
     source_text = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class StatRecordORM(Base):
@@ -113,7 +114,7 @@ class StatRecordORM(Base):
     tool_names_called = Column(Text, nullable=True)
     model_name = Column(String(100), nullable=True)
     has_error = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class NewsCacheORM(Base):
@@ -125,7 +126,7 @@ class NewsCacheORM(Base):
     summary = Column(Text, nullable=True)
     source = Column(String(20), nullable=True)
     published_at = Column(DateTime, nullable=True)
-    fetched_at = Column(DateTime, default=datetime.utcnow)
+    fetched_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class DailyReportDigestORM(Base):
@@ -148,8 +149,9 @@ class DailyReportDigestORM(Base):
     hold_count = Column(Integer, default=0)
     sell_count = Column(Integer, default=0)
     total_pnl_pct = Column(Float, nullable=True)
+    vec_id = Column(String(100), nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class DailyReportORM(Base):
@@ -165,4 +167,18 @@ class DailyReportORM(Base):
     stage2_tokens = Column(Integer, default=0)
     stage3_tokens = Column(Integer, default=0)
     elapsed_ms = Column(Float, default=0.0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class PlanLibraryORM(Base):
+    __tablename__ = "plan_library"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), index=True)
+    question_text = Column(String(1000), nullable=False)
+    chroma_doc_id = Column(String(100), nullable=False, unique=True)
+    plan_json = Column(Text, nullable=False)
+    quality_score = Column(Float, nullable=False, default=0.0)
+    use_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_used_at = Column(DateTime, nullable=True)
