@@ -11,7 +11,9 @@ def test_config_loads_example_values() -> None:
     AppConfig.reset_for_tests()
     cfg = AppConfig.load("config.yaml", exit_on_error=False, force_reload=True)
     assert cfg.models.planner
+    assert cfg.models.memory_extractor
     assert cfg.memory.vector_store.backend == "chromadb"
+    assert cfg.memory.user_profile.max_tokens == 500
     assert cfg.plan_execute.min_plan_steps <= cfg.plan_execute.max_plan_steps
 
 
@@ -21,19 +23,27 @@ def test_config_rejects_invalid_threshold(tmp_path: Path) -> None:
         "models:\n"
         "  query_enhancer: a\n"
         "  conversation_summarizer: b\n"
-        "  react_agent: c\n"
-        "  planner: d\n"
-        "  replanner: e\n"
-        "  executor: f\n"
-        "  finalizer: g\n"
-        "  news_filter: h\n"
-        "  sentiment_analysis: i\n"
-        "  fund_trend: j\n"
-        "  holding_correlation: k\n"
-        "  report_generation: l\n"
-        "  embedding: m\n"
+        "  memory_extractor: c\n"
+        "  react_agent: d\n"
+        "  planner: e\n"
+        "  replanner: f\n"
+        "  executor: g\n"
+        "  finalizer: h\n"
+        "  news_filter: i\n"
+        "  sentiment_analysis: j\n"
+        "  fund_trend: k\n"
+        "  holding_correlation: l\n"
+        "  report_generation: m\n"
+        "  embedding: n\n"
         "memory:\n"
         "  prompt_memory_max_chars: 2000\n"
+        "  user_profile:\n"
+        "    path: .data/user.md\n"
+        "    pending_path: .data/user.pending.md\n"
+        "    max_tokens: 500\n"
+        "    commit_on_shutdown: true\n"
+        "    freeze_during_runtime: true\n"
+        "    extraction_recent_turns: 1\n"
         "  semantic_search:\n"
         "    conversation_top_k: 5\n"
         "    digest_top_k: 3\n"
@@ -68,6 +78,16 @@ def test_config_rejects_invalid_threshold(tmp_path: Path) -> None:
         "  daily_report_workers: 2\n",
         encoding="utf-8",
     )
+
+    AppConfig.reset_for_tests()
+    with pytest.raises(ConfigValidationError):
+        AppConfig.load(broken, exit_on_error=False, force_reload=True)
+
+
+def test_config_rejects_invalid_user_profile_paths(tmp_path: Path) -> None:
+    broken = tmp_path / "config.yaml"
+    base = Path("config.yaml").read_text(encoding="utf-8")
+    broken.write_text(base.replace('pending_path: ".data/user.pending.md"', 'pending_path: ".data/user.md"'), encoding="utf-8")
 
     AppConfig.reset_for_tests()
     with pytest.raises(ConfigValidationError):

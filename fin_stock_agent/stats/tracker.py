@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +13,8 @@ from fin_stock_agent.core.settings import settings
 from fin_stock_agent.core.time_utils import local_now_iso
 from fin_stock_agent.storage.database import get_session
 from fin_stock_agent.storage.models import StatRecordORM
+
+logger = logging.getLogger(__name__)
 
 _PERSIST_EXECUTOR = ThreadPoolExecutor(
     max_workers=get_config().concurrency.post_turn_workers,
@@ -187,5 +190,9 @@ def write_stats_event(
 
 
 def _append_jsonl_record(record: dict[str, Any]) -> None:
-    with (settings.log_dir / "finstock_stats.jsonl").open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, indent=2, ensure_ascii=False, default=str) + "\n\n")
+    try:
+        settings.log_dir.mkdir(parents=True, exist_ok=True)
+        with (settings.log_dir / "finstock_stats.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, indent=2, ensure_ascii=False, default=str) + "\n\n")
+    except OSError as exc:
+        logger.warning("统计 JSONL 写入已跳过：%s", exc)

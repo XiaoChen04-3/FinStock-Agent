@@ -14,6 +14,7 @@ from fin_stock_agent.init.system_init import SystemInit
 from fin_stock_agent.reporting.daily_reporter import DailyReporter
 from fin_stock_agent.reporting.report_tasks import ensure_report_generation
 from fin_stock_agent.scheduler import ensure_scheduler_started
+from fin_stock_agent.services.user_memory_service import UserMemoryService
 from fin_stock_agent.stats.tracker import write_stats_event
 
 
@@ -31,6 +32,7 @@ def ensure_app_bootstrap(user_id: str, session_id: str) -> AppBootstrapSnapshot:
     if "single_user_bootstrapped" not in st.session_state:
         st.session_state["single_user_bootstrapped"] = True
         consolidate_single_user_data()
+        UserMemoryService().initialize_runtime(user_id)
 
     if "scheduler_started" not in st.session_state:
         ensure_scheduler_started()

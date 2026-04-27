@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -10,6 +11,8 @@ from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, Huma
 
 from fin_stock_agent.core.config import get_config
 from fin_stock_agent.core.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,7 @@ _ROLE_MODEL_KEY = {
     DEFAULT_LLM_ROLE: "react_agent",
     "query_enhancer": "query_enhancer",
     "conversation_summarizer": "conversation_summarizer",
+    "memory_extractor": "memory_extractor",
     "react": "react_agent",
     "planner": "planner",
     "replan": "replanner",
@@ -42,6 +46,7 @@ _ROLE_DEFAULTS: dict[str, dict[str, Any]] = {
     DEFAULT_LLM_ROLE: {"temperature": 0.2},
     "query_enhancer": {"temperature": 0.0},
     "conversation_summarizer": {"temperature": 0.0},
+    "memory_extractor": {"temperature": 0.0},
     "react": {"temperature": 0.2},
     "planner": {"temperature": 0.2, "extra_body": {"enable_thinking": True}},
     "replan": {"temperature": 0.2, "extra_body": {"enable_thinking": True}},

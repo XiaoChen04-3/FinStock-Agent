@@ -1,31 +1,46 @@
 # FinStock-Agent 统一运行时配置示例文件
 # 复制此文件为 config.yaml 并按需修改后使用。
 
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
 # 各 Agent 角色使用的 LLM 模型名称
 # 填写 OpenAI 兼容接口所支持的模型标识符
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
 models:
-  query_enhancer: "qwen3.5-flash"        # 问题改写与意图增强模型（轻量、低延迟）
+  query_enhancer: "qwen3.5-flash"          # 问题改写与意图增强模型（轻量、低延迟）
   conversation_summarizer: "qwen3.5-flash" # 对话摘要模型（单轮摘要、输出精简）
-  react_agent: "qwen3.6-plus"            # ReAct 主问答模型（工具调用能力强）
-  planner: "qwen3-max"                   # 规划器模型（生成多步计划，开启 thinking）
-  replanner: "qwen3-max"                 # 重新规划模型（失败后重拟剩余步骤）
-  executor: "qwen3.6-plus"               # 执行器模型（逐步调用工具执行计划步骤）
-  finalizer: "qwen3.6-plus"              # 汇总模型（将所有步骤结果整合为最终答案）
-  news_filter: "qwen3.5-flash"           # 新闻过滤 / 日报摘要模型
-  sentiment_analysis: "qwen3.6-plus"     # 市场情绪分析模型
-  fund_trend: "qwen3.5-flash"            # 基金趋势分析模型
-  holding_correlation: "qwen3.6-plus"    # 持仓关联分析与操作建议模型
-  report_generation: "qwen3.6-plus"      # 日报综合生成模型
-  embedding: "text-embedding-4"          # 向量嵌入模型（用于语义搜索）
+  memory_extractor: "qwen3.5-flash"        # 用户画像记忆提取模型（每轮对话后提炼长期偏好）
+  react_agent: "qwen3.6-plus"              # ReAct 主问答模型（工具调用能力强）
+  planner: "qwen3-max"                     # 规划器模型（生成多步计划，开启 thinking）
+  replanner: "qwen3-max"                   # 重新规划模型（失败后重拟剩余步骤）
+  executor: "qwen3.6-plus"                 # 执行器模型（逐步调用工具执行计划步骤）
+  finalizer: "qwen3.6-plus"                # 汇总模型（将所有步骤结果整合为最终答案）
+  news_filter: "qwen3.5-flash"             # 新闻过滤 / 日报摘要模型
+  sentiment_analysis: "qwen3.6-plus"       # 市场情绪分析模型
+  fund_trend: "qwen3.5-flash"              # 基金趋势分析模型
+  holding_correlation: "qwen3.6-plus"      # 持仓关联分析与操作建议模型
+  report_generation: "qwen3.6-plus"        # 日报综合生成模型
+  embedding: "text-embedding-4"            # 向量嵌入模型（用于语义搜索）
 
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
 # 记忆系统参数
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
 memory:
   # 注入 LLM System Prompt 的记忆上下文最大字符数（超出时按优先级截断）
   prompt_memory_max_chars: 2000
+
+  user_profile:
+    # 用户画像 Markdown 文件路径；默认写入 .data/user.md，不再保存到数据库
+    path: ".data/user.md"
+    # 每轮对话后的新画像先写入 pending 文件，系统关闭时再原子替换正式画像
+    pending_path: ".data/user.pending.md"
+    # 用户画像文档最大 token 数；记忆提取与写入校验都会强制遵守
+    max_tokens: 500
+    # 系统关闭时是否提交 pending 画像，替换旧画像
+    commit_on_shutdown: true
+    # 单次运行期间读取的画像保持冻结，避免同一会话内画像漂移
+    freeze_during_runtime: true
+    # 记忆提取 agent 可参考的最近对话摘要条数
+    extraction_recent_turns: 1
 
   semantic_search:
     # 对话摘要向量检索返回条数上限
@@ -53,9 +68,9 @@ memory:
     # 向量库最大记录总数（跨所有 collection）
     max_total_records: 5000
 
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
 # 每日报告生成参数
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
 daily_report:
   # 每次日报生成时抓取的新闻条数上限
   news_fetch_limit: 50
@@ -72,9 +87,9 @@ daily_report:
   # 日报 overall_summary 字段最大字符数（超出时截断）
   report_summary_max_chars: 180
 
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
 # 规划执行（Plan-and-Execute）参数
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
 plan_execute:
   # Planner 生成的最大步骤数
   max_plan_steps: 6
@@ -85,18 +100,18 @@ plan_execute:
   # 传给 Planner 的记忆上下文最大字符数
   context_max_chars: 2000
 
-# ─────────────────────────────────────────────
-# 本地测试 API 服务器参数（tools/cli_test.py 使用）
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
+# 本地测试 API 服务参数（tools/cli_test.py 使用）
+# ────────────────────────────────────────────
 test_api:
   # 测试 API 监听地址
   host: "127.0.0.1"
   # 测试 API 监听端口（范围 1024~65535）
   port: 8765
 
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
 # 并发控制参数
-# ─────────────────────────────────────────────
+# ────────────────────────────────────────────
 concurrency:
   # 每轮对话结束后异步任务（记忆保存、统计写入）的线程池大小
   post_turn_workers: 4

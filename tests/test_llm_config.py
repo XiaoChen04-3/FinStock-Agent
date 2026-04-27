@@ -7,6 +7,7 @@ from fin_stock_agent.core.llm import build_llm_kwargs, describe_agent_chain, get
 def test_online_qa_llm_roles_are_configured() -> None:
     cfg = get_config()
     assert get_llm_profile("query_enhancer").model == cfg.models.query_enhancer
+    assert get_llm_profile("memory_extractor").model == cfg.models.memory_extractor
     assert get_llm_profile("react").model == cfg.models.react_agent
     assert get_llm_profile("planner").model == cfg.models.planner
     assert get_llm_profile("replan").model == cfg.models.replanner
@@ -15,8 +16,10 @@ def test_online_qa_llm_roles_are_configured() -> None:
 
     planner_kwargs = build_llm_kwargs("planner")
     assert planner_kwargs["extra_body"] == {"enable_thinking": True}
+    assert build_llm_kwargs("memory_extractor")["temperature"] == 0.0
     assert role_uses_thinking("planner") is True
     assert role_uses_thinking("replan") is True
+    assert role_uses_thinking("memory_extractor") is False
 
 
 def test_daily_report_llm_roles_are_configured() -> None:

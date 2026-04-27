@@ -78,7 +78,9 @@ def init_db() -> None:
         Base.metadata.create_all(bind=engine)
     except OperationalError as exc:
         message = str(exc).lower()
-        if "readonly" not in message or settings.database_url != f"sqlite:///{(settings.data_dir / ('finstock_test.db' if settings._is_pytest_runtime() else 'finstock.db')).as_posix()}":
+        default_url = f"sqlite:///{(settings.data_dir / ('finstock_test.db' if settings._is_pytest_runtime() else 'finstock.db')).as_posix()}"
+        recoverable = "readonly" in message or "unable to open database file" in message
+        if not recoverable or settings.database_url != default_url:
             raise
         runtime_url = _fallback_runtime_database()
         engine, SessionLocal = _make_engine(runtime_url)

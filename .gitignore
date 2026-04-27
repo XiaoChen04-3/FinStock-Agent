@@ -184,7 +184,10 @@ cython_debug/
 
 logs/
 .data/
+user_runtime*.md
 .streamlit/
 .cursor/
 .codex/
 *.db
+
+tests/eval/

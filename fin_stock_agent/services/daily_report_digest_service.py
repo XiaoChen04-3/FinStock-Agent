@@ -105,14 +105,21 @@ class DailyReportDigestService:
             logger.warning("Daily report digest vector upsert failed: %s", exc)
 
     def get_recent_digests(self, user_id: str, limit: int = 5) -> list[DailyReportDigestORM]:
+        """Load digest rows. Expunge before returning so callers can read attributes after
+        the session context closes (avoids "not bound to a Session" on lazy/expired state).
+        """
         with get_session() as session:
-            rows = session.execute(
-                select(DailyReportDigestORM)
-                .where(DailyReportDigestORM.user_id == user_id)
-                .order_by(DailyReportDigestORM.report_date.desc())
-                .limit(limit)
-            ).scalars()
-            return list(rows)
+            rows = list(
+                session.execute(
+                    select(DailyReportDigestORM)
+                    .where(DailyReportDigestORM.user_id == user_id)
+                    .order_by(DailyReportDigestORM.report_date.desc())
+                    .limit(limit)
+                ).scalars()
+            )
+            for row in rows:
+                session.expunge(row)
+            return rows
 
     def build_digest_context(self, user_id: str, limit: int = 5) -> str:
         digests = self.get_recent_digests(user_id=user_id, limit=limit)

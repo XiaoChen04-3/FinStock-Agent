@@ -23,17 +23,10 @@ class MemoryManager:
         self.digest_service = DailyReportDigestService()
 
     def build_context_block(self, question: str = "") -> str:
-        """Assemble the full memory context injected into every system prompt.
+        """组装注入每个 system prompt 的记忆上下文。
 
-        Three persistent memory layers + short-term conversation history:
-          Layer 1 — Portfolio state   : current holdings & PnL (hard facts)
-          Layer 2 — User profile      : preferences, style, constraints (slow-changing)
-          Layer 3 — Daily report      : recent N-day market sentiment & holding recommendations
-          Auxiliary — Conv. history   : recent turn summaries (short-term continuity)
-
-        Note: the confidence event stream (user_memory_events) is kept in the DB
-        as an audit/debug log but is intentionally excluded from the LLM context
-        to avoid redundancy with the already-up-to-date profile snapshot.
+        用户画像层使用文件存储。单个进程生命周期内注入的是启动时快照；
+        每轮对话后的画像提取只更新 pending Markdown，并在关闭时提交。
         """
         digest_block = self._build_digest_block(question)
         history_block = self._build_history_block(question)
@@ -52,8 +45,8 @@ class MemoryManager:
         max_chars = min(cfg.memory.prompt_memory_max_chars, cfg.plan_execute.context_max_chars)
         sections = [
             ("portfolio", self._prompt_portfolio_context()),
-            ("profile_core", self._prompt_profile_core()),
-            ("profile_extra", self._prompt_profile_extra()),
+            ("profile_core", self.user_memory_service.build_prompt_profile_context(self.user_id)),
+            ("profile_extra", ""),
             ("history", self._prompt_history_context(question)),
         ]
         return self._trim_sections(sections, max_chars)
@@ -75,18 +68,12 @@ class MemoryManager:
 
     def _full_portfolio_context(self) -> str:
         context = self.portfolio_service.build_portfolio_context(self.user_id)
-        if "暂无持仓记录" in context:
+        if "暂无持仓记录" in context or "æš‚æ— æŒä»“è®°å½•" in context:
             return "## 当前持仓\n当前用户暂无持仓，请从全市场视角进行分析。"
         return context
 
     def _full_profile_context(self) -> str:
-        context = self.user_memory_service.build_profile_context(self.user_id)
-        if "暂无用户画像" in context:
-            return (
-                "## 用户画像记忆\n"
-                "暂无持久化画像，将以中性投资者假设分析，待用户明确表达偏好后再更新。"
-            )
-        return context
+        return self.user_memory_service.build_profile_context(self.user_id)
 
     def _build_digest_block(self, question: str) -> str:
         digests = self.digest_service.search_relevant_digests(self.user_id, question) if question else []
@@ -120,30 +107,6 @@ class MemoryManager:
             )
         return "\n".join(lines)
 
-    def _prompt_profile_core(self) -> str:
-        profile = self.user_memory_service.get_profile(self.user_id)
-        if profile.is_empty():
-            return (
-                "## 投资者画像\n"
-                "风险偏好：未知\n投资期限：未知\n关注主题：暂无\n投资约束：暂无"
-            )
-        lines = ["## 投资者画像"]
-        lines.append(f"风险偏好：{profile.risk_level or '未知'}")
-        lines.append(f"投资期限：{profile.investment_horizon or '未知'}")
-        lines.append(f"关注主题：{', '.join(profile.focus_themes[:6]) if profile.focus_themes else '暂无'}")
-        return "\n".join(lines)
-
-    def _prompt_profile_extra(self) -> str:
-        profile = self.user_memory_service.get_profile(self.user_id)
-        if profile.is_empty():
-            return "## 投资约束\n回答风格：未指定\n约束条件：未指定"
-        lines = ["## 投资约束"]
-        lines.append(f"回答风格：{', '.join(profile.answer_style[:6]) if profile.answer_style else '未指定'}")
-        lines.append(
-            f"约束条件：{', '.join(profile.decision_constraints[:6]) if profile.decision_constraints else '未指定'}"
-        )
-        return "\n".join(lines)
-
     def _prompt_history_context(self, question: str) -> str:
         summaries = self.conversation_memory.search_relevant_summaries(self.user_id, question) if question else []
         if not summaries:
@@ -165,6 +128,8 @@ class MemoryManager:
         drop_order = ["history", "profile_extra", "profile_core", "portfolio"]
         working = list(kept)
         while len("\n\n".join(text for _, text in working)) > max_chars and working:
+            if not drop_order:
+                break
             name = drop_order[0]
             for index in range(len(working) - 1, -1, -1):
                 if working[index][0] == name:
@@ -172,10 +137,8 @@ class MemoryManager:
                     break
             else:
                 drop_order.pop(0)
-                if not drop_order:
-                    break
         result = "\n\n".join(text for _, text in working)
         if len(result) > max_chars:
-            logger.warning("提示词记忆块超出字符预算，已进行截断")
+            logger.warning("Prompt 记忆上下文超过字符预算，已截断")
             return result[:max_chars]
         return result

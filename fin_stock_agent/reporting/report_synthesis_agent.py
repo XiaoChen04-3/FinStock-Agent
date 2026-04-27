@@ -127,6 +127,12 @@ class ReportGenerationAgent:
             code = holding["ts_code"]
             analysis = analyses.get(code, {})
             recommendation = recommendations.get(code, {})
+            reasoning = str(recommendation.get("reasoning") or "").strip()
+            analysis_text = str(analysis.get("analysis") or "").strip()
+            if reasoning and analysis_text and analysis_text not in reasoning:
+                reason = f"{analysis_text} {reasoning}"
+            else:
+                reason = reasoning or analysis_text
             market_value = holding.get("market_value")
             unrealized = holding.get("unrealized_pnl")
             cost_basis = max(float(holding.get("avg_cost") or 0.0) * float(holding.get("quantity") or 0.0), 1e-6)
@@ -143,7 +149,7 @@ class ReportGenerationAgent:
                     today_change_pct=0.0,
                     action=str(recommendation.get("action") or "hold"),
                     confidence=float(recommendation.get("confidence", 0.5)),
-                    reason=str(recommendation.get("reasoning") or analysis.get("analysis") or ""),
+                    reason=reason,
                     trend=str(analysis.get("trend") or "insufficient_data"),
                     analysis_summary=str(analysis.get("analysis") or ""),
                     three_year_return_pct=analysis.get("metrics", {}).get("return_3y"),

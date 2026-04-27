@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy import select
 
 from fin_stock_agent.core.settings import settings
+from fin_stock_agent.memory.user_profile_file import get_user_profile_file_service
 from fin_stock_agent.stats.tracker import write_stats_event
 from fin_stock_agent.storage.database import get_session
 from fin_stock_agent.storage.models import (
@@ -56,8 +57,6 @@ class LocalUserService:
             memory_event_rows = session.execute(
                 select(UserMemoryEventORM).where(UserMemoryEventORM.user_id.in_(legacy_user_ids))
             ).scalars().all()
-            for row in memory_event_rows:
-                row.user_id = canonical_user_id
             summary["memory_event_rows_migrated"] = len(memory_event_rows)
 
             memory_profile_rows = session.execute(
@@ -65,15 +64,8 @@ class LocalUserService:
             ).scalars().all()
             if memory_profile_rows:
                 winner = self._pick_memory_profile_winner(memory_profile_rows, canonical_user_id)
-                if winner.user_id != canonical_user_id:
-                    winner.user_id = canonical_user_id
-                    summary["memory_profile_rows_migrated"] += 1
-                for row in memory_profile_rows:
-                    if row is winner:
-                        continue
-                    if row.user_id != canonical_user_id:
-                        summary["memory_profile_rows_migrated"] += 1
-                    session.delete(row)
+                self._export_memory_profile_if_needed(winner)
+                summary["memory_profile_rows_migrated"] = len(memory_profile_rows)
 
             report_rows = session.execute(
                 select(DailyReportORM).where(
@@ -142,3 +134,12 @@ class LocalUserService:
         if canonical_rows:
             return max(canonical_rows, key=lambda row: row.updated_at or datetime.min)
         return max(rows, key=lambda row: row.updated_at or datetime.min)
+
+    def _export_memory_profile_if_needed(self, row: UserMemoryProfileORM) -> None:
+        try:
+            from fin_stock_agent.services.user_memory_service import UserMemoryService
+
+            service = get_user_profile_file_service()
+            service.initialize(initial_text=UserMemoryService()._legacy_row_to_markdown(row))
+        except Exception:
+            return

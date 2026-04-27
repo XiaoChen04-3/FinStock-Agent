@@ -4,7 +4,8 @@ import json
 import logging
 import uuid
 from collections.abc import Generator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
+from threading import Lock
 
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
@@ -30,6 +31,26 @@ _POST_TURN_EXECUTOR = ThreadPoolExecutor(
     max_workers=get_config().concurrency.post_turn_workers,
     thread_name_prefix="post-turn",
 )
+_POST_TURN_FUTURES: list[Future] = []
+_POST_TURN_LOCK = Lock()
+
+
+def _submit_post_turn_task(fn) -> Future:
+    future = _POST_TURN_EXECUTOR.submit(fn)
+    with _POST_TURN_LOCK:
+        _POST_TURN_FUTURES[:] = [item for item in _POST_TURN_FUTURES if not item.done()]
+        _POST_TURN_FUTURES.append(future)
+    return future
+
+
+def flush_post_turn_tasks(timeout: float | None = None) -> None:
+    with _POST_TURN_LOCK:
+        futures = list(_POST_TURN_FUTURES)
+    if not futures:
+        return
+    wait(futures, timeout=timeout)
+    with _POST_TURN_LOCK:
+        _POST_TURN_FUTURES[:] = [item for item in _POST_TURN_FUTURES if not item.done()]
 
 
 class _TokenCounter(BaseCallbackHandler):
@@ -160,7 +181,23 @@ def _persist_turn_async(
             memory_manager.after_turn(turn_idx, question, answer)
         tracker.finish(has_error=has_error, background=False)
 
-    _POST_TURN_EXECUTOR.submit(_task)
+    _submit_post_turn_task(_task)
+
+
+def _persist_memory_async(
+    *,
+    memory_manager: MemoryManager,
+    history_messages: list | None,
+    question: str,
+    answer: str,
+) -> None:
+    turn_idx = (len(history_messages or []) // 2) + 1
+
+    def _task() -> None:
+        if answer:
+            memory_manager.after_turn(turn_idx, question, answer)
+
+    _submit_post_turn_task(_task)
 
 
 def _build_plan_execute_seed(
@@ -222,7 +259,7 @@ def _maybe_persist_plan_async(user_id: str, question_text: str, state: dict) -> 
         except Exception as exc:
             logger.warning("Plan library save failed: %s", exc)
 
-    _POST_TURN_EXECUTOR.submit(_task)
+    _submit_post_turn_task(_task)
 
 
 def _score_plan_quality(state: dict) -> float:
@@ -261,7 +298,12 @@ def run_agent(
         try:
             result = build_react_agent().invoke({"messages": messages})
             answer = extract_last_ai_text(result.get("messages", [])) or "(no answer)"
-            memory_manager.after_turn((len(history_messages or []) // 2) + 1, question, answer)
+            _persist_memory_async(
+                memory_manager=memory_manager,
+                history_messages=history_messages,
+                question=question,
+                answer=answer,
+            )
             return answer
         except Exception as exc:
             raise AgentRoutingError(str(exc)) from exc
@@ -270,7 +312,12 @@ def run_agent(
     result = build_plan_execute_agent().invoke(seed)
     answer = result.get("response") or ""
     _maybe_persist_plan_async(user_id, seed["question"], result)
-    memory_manager.after_turn((len(history_messages or []) // 2) + 1, question, answer)
+    _persist_memory_async(
+        memory_manager=memory_manager,
+        history_messages=history_messages,
+        question=question,
+        answer=answer,
+    )
     return answer
 
 

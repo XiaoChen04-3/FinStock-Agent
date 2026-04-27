@@ -28,8 +28,6 @@ from fin_stock_agent.storage.models import (
     ConversationSummaryORM,
     DailyReportDigestORM,
     PlanLibraryORM,
-    UserMemoryEventORM,
-    UserMemoryProfileORM,
 )
 
 try:
@@ -56,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         _print_error(str(exc))
         return 1
     except KeyboardInterrupt:
-        _print("Interrupted.")
+        _print("已中断。")
         return 0
     except Exception as exc:
         _print_error(f"[ERROR] {type(exc).__name__}: {exc}")
@@ -91,10 +89,10 @@ def _dispatch(args, user_id: str) -> int:
             time.sleep(1)
         _print("")
         if snapshot.state != "completed":
-            raise RuntimeError(snapshot.error or "report generation failed")
+            raise RuntimeError(snapshot.error or "日报生成失败")
         report = DailyReporter().get_existing_report(user_id, report_date)
         if report is None:
-            raise RuntimeError("report finished but could not be loaded")
+            raise RuntimeError("日报任务已完成，但无法加载报告内容")
         _print(json.dumps({
             "report_date": report.report_date,
             "overall_summary": report.overall_summary,
@@ -110,19 +108,24 @@ def _dispatch(args, user_id: str) -> int:
         return 0
     if args.command == "reset-memory":
         _reset_memory(user_id)
-        _print(f"Reset memory for {user_id}.")
+        _print(f"已重置用户 {user_id} 的记忆。")
         return 0
-    raise RuntimeError(f"Unknown command: {args.command}")
+    if args.command == "flush-profile":
+        changed = UserMemoryService().commit_pending_profile()
+        _print(f"已提交 pending 用户画像：{changed}")
+        return 0
+    raise RuntimeError(f"未知命令：{args.command}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="FinStock-Agent standalone CLI test tool")
-    parser.add_argument("--user-id", default="", help="Target user id. Defaults to the local canonical user.")
+    parser = argparse.ArgumentParser(description="FinStock-Agent 本地 CLI 测试工具")
+    parser.add_argument("--user-id", default="", help="目标用户 ID，默认使用本机规范用户。")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("memory")
     subparsers.add_parser("plan-lib")
     subparsers.add_parser("reset-memory")
+    subparsers.add_parser("flush-profile")
 
     parser_chat = subparsers.add_parser("chat")
     parser_chat.add_argument("question")
@@ -145,7 +148,7 @@ def _ensure_trade_calendar() -> None:
 
 def _require_openai_key() -> None:
     if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY is not configured in the environment.")
+        raise RuntimeError("环境变量中未配置 OPENAI_API_KEY。")
 
 
 def _render_stream_event(event_type: str, content: str) -> None:
@@ -183,27 +186,39 @@ def _render_stream_event(event_type: str, content: str) -> None:
 
 
 def _show_memory(user_id: str) -> None:
-    profile = UserMemoryService().get_profile(user_id)
+    service = UserMemoryService()
+    service.initialize_runtime(user_id)
+    profile = service.get_profile(user_id)
+    profile_snapshot = service.snapshot()
     summaries = ConversationMemory(user_id=user_id, session_id="cli").get_recent_summaries(user_id, limit=5)
     digests = DailyReportDigestService().get_recent_digests(user_id, limit=5)
     if console is None or Table is None:
         payload = {
             "profile": profile.model_dump(mode="json"),
+            "profile_file": {
+                "path": profile_snapshot["path"],
+                "pending_path": profile_snapshot["pending_path"],
+                "token_estimate": profile_snapshot["token_estimate"],
+                "pending_exists": profile_snapshot["pending_exists"],
+                "active_text": profile_snapshot["active_text"],
+            },
             "summaries": summaries,
             "digests": [row.report_date for row in digests],
         }
         _print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         return
 
-    table = Table(title=f"Memory snapshot for {user_id}")
-    table.add_column("Section")
-    table.add_column("Value")
-    table.add_row("Risk", profile.risk_level or "unknown")
-    table.add_row("Horizon", profile.investment_horizon or "unknown")
-    table.add_row("Themes", ", ".join(profile.focus_themes) or "-")
-    table.add_row("Watchlist", ", ".join(profile.watchlist) or "-")
-    table.add_row("Summaries", "\n".join(summaries) or "-")
-    table.add_row("Digests", "\n".join(f"{row.report_date}: {row.overall_summary or ''}" for row in digests) or "-")
+    table = Table(title=f"用户 {user_id} 的记忆快照")
+    table.add_column("项目")
+    table.add_column("内容")
+    table.add_row("风险承受", profile.risk_level or "未知")
+    table.add_row("投资期限", profile.investment_horizon or "未知")
+    table.add_row("关注主题", "，".join(profile.focus_themes) or "-")
+    table.add_row("自选标的", "，".join(profile.watchlist) or "-")
+    table.add_row("画像文件", f"{profile_snapshot['path']}\npending：{profile_snapshot['pending_exists']}")
+    table.add_row("画像内容", profile_snapshot["active_text"])
+    table.add_row("对话摘要", "\n".join(summaries) or "-")
+    table.add_row("日报摘要", "\n".join(f"{row.report_date}: {row.overall_summary or ''}" for row in digests) or "-")
     console.print(table)
 
 
@@ -216,8 +231,9 @@ def _reset_memory(user_id: str) -> None:
     ConversationMemory(user_id=user_id, session_id="cli").clear_user(user_id)
     DailyReportDigestService().clear_user(user_id)
     PlanLibraryService().clear_user(user_id)
+    UserMemoryService().reset_profile_file()
     with get_session() as session:
-        for model in (UserMemoryEventORM, UserMemoryProfileORM, ConversationSummaryORM, DailyReportDigestORM, PlanLibraryORM):
+        for model in (ConversationSummaryORM, DailyReportDigestORM, PlanLibraryORM):
             rows = session.query(model).filter(model.user_id == user_id).all()
             for row in rows:
                 session.delete(row)
